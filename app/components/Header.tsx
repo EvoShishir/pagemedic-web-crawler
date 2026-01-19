@@ -34,7 +34,7 @@ export function Header({ isDark, onToggleTheme }: HeaderProps) {
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              <span className="text-gradient">Web Crawler</span>
+              <span className="text-gradient">PageMedic</span>
             </h1>
             <p
               className={`text-sm ${
