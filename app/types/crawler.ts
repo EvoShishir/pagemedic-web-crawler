@@ -23,9 +23,39 @@ export interface ConsoleError {
   timestamp: string;
 }
 
+export interface NavigationIssue {
+  url: string;
+  reason: string;
+  foundOnPage: string;
+  linkText: string;
+  elementContext: string;
+  timestamp: string;
+}
+
 export interface CrawlerEventData {
-  type: "log" | "prompt" | "done" | "error" | "broken_link" | "broken_image" | "console_error";
+  type: "log" | "prompt" | "done" | "error" | "broken_link" | "broken_image" | "console_error" | "navigation_issue";
   message?: string;
   sessionId?: string;
-  data?: BrokenLink | BrokenImage | ConsoleError;
+  data?: BrokenLink | BrokenImage | ConsoleError | NavigationIssue;
+}
+
+export interface DiscoveryStatus {
+  phase: "starting" | "sitemap" | "sitemap_done" | "sitemap_error" | "sitemap_detect" | "sitemap_not_found" | "browser" | "scanning";
+  message: string;
+  total: number;
+  fromSitemap: number;
+  pagesScanned: number;
+  currentUrl?: string;
+}
+
+export interface DiscoveryEventData {
+  type: "status" | "done" | "error";
+  phase?: string;
+  message: string;
+  total?: number;
+  fromSitemap?: number;
+  fromPages?: number;
+  pagesScanned?: number;
+  currentUrl?: string;
+  links?: string[];
 }

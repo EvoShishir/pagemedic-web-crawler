@@ -133,7 +133,7 @@ export function ConsoleErrorsPanel({ consoleErrors, isDark }: ConsoleErrorsPanel
           <button
             key={tab.key}
             onClick={() => setFilter(tab.key)}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+            className={`cursor-pointer px-3 py-1.5 text-xs rounded-lg transition-colors ${
               filter === tab.key
                 ? isDark
                   ? "bg-violet-500/20 text-violet-400"
@@ -272,7 +272,7 @@ export function ConsoleErrorsPanel({ consoleErrors, isDark }: ConsoleErrorsPanel
                             e.stopPropagation();
                             handleCopy(error.message, index);
                           }}
-                          className={`shrink-0 p-2 rounded-lg transition-colors ${
+                          className={`cursor-pointer shrink-0 p-2 rounded-lg transition-colors ${
                             isDark
                               ? "hover:bg-zinc-700 text-zinc-400"
                               : "hover:bg-slate-200 text-slate-500"

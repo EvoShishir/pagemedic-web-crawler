@@ -6,15 +6,17 @@ import { EmptyState } from "./EmptyState";
 import { BrokenLinksPanel } from "./BrokenLinksPanel";
 import { BrokenImagesPanel } from "./BrokenImagesPanel";
 import { ConsoleErrorsPanel } from "./ConsoleErrorsPanel";
-import { BrokenLink, BrokenImage, ConsoleError } from "../types/crawler";
+import { NavigationIssuesPanel } from "./NavigationIssuesPanel";
+import { BrokenLink, BrokenImage, ConsoleError, NavigationIssue } from "../types/crawler";
 
-type TabType = "logs" | "broken-links" | "broken-images" | "console-errors";
+type TabType = "logs" | "broken-links" | "broken-images" | "console-errors" | "nav-issues";
 
 interface ContentPanelProps {
   logs: string[];
   brokenLinks: BrokenLink[];
   brokenImages: BrokenImage[];
   consoleErrors: ConsoleError[];
+  navigationIssues: NavigationIssue[];
   currentUrl: string | null;
   isCrawling: boolean;
   isDark: boolean;
@@ -27,6 +29,7 @@ export function ContentPanel({
   brokenLinks,
   brokenImages,
   consoleErrors,
+  navigationIssues,
   currentUrl,
   isCrawling,
   isDark,
@@ -77,6 +80,7 @@ export function ContentPanel({
         </svg>
       ),
     },
+    
     {
       id: "broken-links",
       label: "Broken Links",
@@ -93,6 +97,26 @@ export function ContentPanel({
             strokeLinecap="round"
             strokeLinejoin="round"
             d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+          />
+        </svg>
+      ),
+    },
+    {
+      id: "nav-issues",
+      label: "Nav Issues",
+      count: navigationIssues.length,
+      icon: (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
           />
         </svg>
       ),
@@ -137,6 +161,7 @@ export function ContentPanel({
         </svg>
       ),
     },
+    
   ];
 
   return (
@@ -157,7 +182,7 @@ export function ContentPanel({
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+            className={`cursor-pointer flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
               activeTab === tab.id
                 ? isDark
                   ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
@@ -180,6 +205,10 @@ export function ContentPanel({
                     ? isDark
                       ? "bg-orange-500/20 text-orange-400"
                       : "bg-orange-100 text-orange-600"
+                    : tab.id === "nav-issues"
+                    ? isDark
+                      ? "bg-amber-500/20 text-amber-400"
+                      : "bg-amber-100 text-amber-600"
                     : isDark
                     ? "bg-violet-500/20 text-violet-400"
                     : "bg-violet-100 text-violet-600"
@@ -253,13 +282,17 @@ export function ContentPanel({
         {activeTab === "console-errors" && (
           <ConsoleErrorsPanel consoleErrors={consoleErrors} isDark={isDark} />
         )}
+
+        {activeTab === "nav-issues" && (
+          <NavigationIssuesPanel navigationIssues={navigationIssues} isDark={isDark} />
+        )}
       </div>
 
       {/* Scroll to bottom button - only show on logs tab */}
       {showScrollButton && activeTab === "logs" && logs.length > 0 && (
         <button
           onClick={scrollToBottom}
-          className={`absolute bottom-4 right-6 flex items-center gap-2 p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-105 z-10 ${
+          className={`cursor-pointer absolute bottom-4 right-6 flex items-center gap-2 p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-105 z-10 ${
             isDark
               ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/25"
               : "bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/30"

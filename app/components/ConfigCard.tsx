@@ -24,8 +24,11 @@ export function ConfigCard({
   const [startUrl, setStartUrl] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
 
-  const handleStart = () => {
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isCrawling) {
     onStartCrawl(startUrl, sitemapUrl);
+    }
   };
 
   return (
@@ -36,7 +39,7 @@ export function ConfigCard({
           : "bg-white/80 border-slate-200 glow-primary-subtle-light"
       }`}
     >
-      <div>
+      <form onSubmit={handleSubmit}>
         {/* <Header isDark={isDark} onToggleTheme={onToggleTheme} /> */}
 
         <div className="space-y-4">
@@ -52,8 +55,10 @@ export function ConfigCard({
             <input
               type="url"
               value={startUrl}
-              onChange={(e) => setStartUrl(e.target.value)}
-              placeholder="https://example.com"
+              onChange={(e) => {setStartUrl(e.target.value)
+                setSitemapUrl(e.target.value.endsWith("/") ? e.target.value + "sitemap.xml" : e.target.value + "/sitemap.xml")
+              }}
+              placeholder="https://www.google.com"
               disabled={isCrawling}
               className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 isDark
@@ -96,13 +101,12 @@ export function ConfigCard({
         <CrawlButtons
           isCrawling={isCrawling}
           startUrl={startUrl}
-          onStart={handleStart}
           onStop={onStop}
           isDark={isDark}
         />
+      </form>
 
         <StatsGrid stats={stats} isDark={isDark} />
-      </div>
     </section>
   );
 }

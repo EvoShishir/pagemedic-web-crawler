@@ -154,7 +154,7 @@ export function BrokenImagesPanel({ brokenImages, isDark }: BrokenImagesPanelPro
                     </code>
                     <button
                       onClick={() => handleCopy(image.src, index)}
-                      className={`shrink-0 p-2 rounded-lg transition-colors ${
+                      className={`cursor-pointer shrink-0 p-2 rounded-lg transition-colors ${
                         isDark
                           ? "hover:bg-zinc-700 text-zinc-400"
                           : "hover:bg-slate-200 text-slate-500"

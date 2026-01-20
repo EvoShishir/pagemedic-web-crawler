@@ -137,7 +137,7 @@ export function ActivityLog({
       {showScrollButton && logs.length > 0 && (
         <button
           onClick={scrollToBottom}
-          className={`absolute bottom-4 right-6 flex items-center gap-2 p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-105 ${
+          className={`cursor-pointer absolute bottom-4 right-6 flex items-center gap-2 p-4 rounded-full shadow-lg transition-all duration-200 hover:scale-105 ${
             isDark
               ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/25"
               : "bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/30"

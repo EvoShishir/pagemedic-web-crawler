@@ -7,7 +7,7 @@ export function ThemeToggle({ isDark, onToggle }: ThemeToggleProps) {
   return (
     <button
       onClick={onToggle}
-      className={`theme-toggle p-3 rounded-xl border ${
+      className={`cursor-pointer theme-toggle p-3 rounded-xl border ${
         isDark
           ? "bg-zinc-800 border-zinc-600/80 hover:bg-zinc-700"
           : "bg-white border-slate-200 hover:bg-slate-50 shadow-sm"

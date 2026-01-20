@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { BrokenLink, BrokenImage, ConsoleError } from "../types/crawler";
+import { BrokenLink, BrokenImage, ConsoleError, NavigationIssue } from "../types/crawler";
 
 export interface CrawlerStats {
   crawled: number;
@@ -8,13 +8,15 @@ export interface CrawlerStats {
   brokenLinks: number;
   brokenImages: number;
   consoleErrors: number;
+  navigationIssues: number;
 }
 
 export function useStats(
   logs: string[],
   brokenLinks: BrokenLink[],
   brokenImages: BrokenImage[],
-  consoleErrors: ConsoleError[]
+  consoleErrors: ConsoleError[],
+  navigationIssues: NavigationIssue[]
 ): CrawlerStats {
   return useMemo(() => {
     let crawled = 0;
@@ -34,6 +36,7 @@ export function useStats(
       brokenLinks: brokenLinks.length,
       brokenImages: brokenImages.length,
       consoleErrors: consoleErrors.length,
+      navigationIssues: navigationIssues.length,
     };
-  }, [logs, brokenLinks, brokenImages, consoleErrors]);
+  }, [logs, brokenLinks, brokenImages, consoleErrors, navigationIssues]);
 }

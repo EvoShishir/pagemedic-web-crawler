@@ -1,7 +1,6 @@
 interface CrawlButtonsProps {
   isCrawling: boolean;
   startUrl: string;
-  onStart: () => void;
   onStop: () => void;
   isDark: boolean;
 }
@@ -9,16 +8,15 @@ interface CrawlButtonsProps {
 export function CrawlButtons({
   isCrawling,
   startUrl,
-  onStart,
   onStop,
   isDark,
 }: CrawlButtonsProps) {
   return (
     <div className="flex items-center gap-3 my-4">
       <button
-        onClick={onStart}
+        type="submit"
         disabled={isCrawling || !startUrl}
-        className="group relative px-6 py-3 bg-linear-to-r border border-indigo-600/80 from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 rounded-xl font-medium text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-indigo-500/25 transition-all duration-200 btn-press"
+        className="cursor-pointer group relative px-6 py-3 bg-linear-to-r border border-indigo-600/80 from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 rounded-xl font-medium text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-indigo-500/25 transition-all duration-200 btn-press"
       >
         <span className="flex items-center gap-2">
           {isCrawling ? (
@@ -73,8 +71,9 @@ export function CrawlButtons({
 
       {isCrawling && (
         <button
+          type="button"
           onClick={onStop}
-          className={`px-6 py-3 border rounded-xl font-medium transition-all duration-200 btn-press ${
+          className={`cursor-pointer px-6 py-3 border rounded-xl font-medium transition-all duration-200 btn-press ${
             isDark
               ? "bg-zinc-800 border-zinc-600/80 text-zinc-300 hover:bg-red-950 hover:border-red-700 hover:text-red-400"
               : "bg-white border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600"

@@ -2,7 +2,7 @@ import { chromium, Page, Request, Response as PlaywrightResponse } from "playwri
 import { NextRequest } from "next/server";
 import https from "https";
 import http from "http";
-import { BrokenLink, BrokenImage, ConsoleError } from "../../types/crawler";
+import { BrokenLink, BrokenImage, ConsoleError, NavigationIssue } from "../../types/crawler";
 
 // Domains that commonly block automated requests (false positives)
 const SKIP_EXTERNAL_DOMAINS = [
@@ -13,7 +13,6 @@ const SKIP_EXTERNAL_DOMAINS = [
   "instagram.com",
   "tiktok.com",
   "youtube.com",
-  "google.com",
   "pinterest.com",
   "reddit.com",
   "discord.com",
@@ -246,6 +245,7 @@ async function extractLinksWithContext(page: Page): Promise<
     href: string;
     text: string;
     context: string;
+    isInHeader: boolean;
   }>
 > {
   return page.$$eval("a[href]", (anchors) => {
@@ -257,10 +257,14 @@ async function extractLinksWithContext(page: Page): Promise<
         ? `.${parent.className.split(" ").filter(Boolean).slice(0, 2).join(".")}`
         : "";
 
+      // Check if this link is inside a header or nav element
+      const isInHeader = anchor.closest("header, nav") !== null;
+
       return {
         href: anchor.href,
         text: anchor.textContent?.trim() || "[No text]",
         context: `<${parentTag}${parentClass}>`,
+        isInHeader,
       };
     });
   });
@@ -360,14 +364,66 @@ function getResourceType(url: string, contentType?: string): "link" | "image" | 
   }
 }
 
+// Handle both GET (legacy/EventSource) and POST (for large payloads)
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const startUrl = searchParams.get("startUrl");
   const sitemapUrl = searchParams.get("sitemapUrl");
+  const selectedUrlsParam = searchParams.get("selectedUrls");
 
   if (!startUrl) {
     return new Response("Missing startUrl parameter", { status: 400 });
   }
+
+  // Parse selected URLs if provided (JSON array) - clean URLs to ensure consistent matching
+  let selectedUrls: Set<string> | null = null;
+  if (selectedUrlsParam) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(selectedUrlsParam));
+      if (Array.isArray(parsed)) {
+        selectedUrls = new Set(parsed.map((url: string) => cleanUrl(url)));
+      }
+    } catch {
+      // Invalid JSON, ignore
+    }
+  }
+
+  return handleCrawl(startUrl, sitemapUrl, selectedUrls);
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { startUrl, sitemapUrl, selectedUrls: selectedUrlsArray, allDiscoveredUrls: allDiscoveredArray } = body;
+
+    if (!startUrl) {
+      return new Response("Missing startUrl parameter", { status: 400 });
+    }
+
+    // Parse selected URLs from body - clean URLs to ensure consistent matching
+    let selectedUrls: Set<string> | null = null;
+    if (Array.isArray(selectedUrlsArray)) {
+      selectedUrls = new Set(selectedUrlsArray.map((url: string) => cleanUrl(url)));
+    }
+
+    // Parse all discovered URLs (from sitemap) - these should be skipped from validation
+    let allDiscoveredUrls: Set<string> | null = null;
+    if (Array.isArray(allDiscoveredArray)) {
+      allDiscoveredUrls = new Set(allDiscoveredArray.map((url: string) => cleanUrl(url)));
+    }
+
+    return handleCrawl(startUrl, sitemapUrl || null, selectedUrls, allDiscoveredUrls);
+  } catch (err: any) {
+    return new Response(`Invalid request body: ${err.message}`, { status: 400 });
+  }
+}
+
+function handleCrawl(
+  startUrl: string,
+  sitemapUrl: string | null,
+  selectedUrls: Set<string> | null,
+  allDiscoveredUrls: Set<string> | null = null
+) {
 
   const { stream, sendEvent, close } = createSSEResponse();
 
@@ -386,8 +442,13 @@ export async function GET(request: NextRequest) {
 
       const visited = new Set<string>();
       const checkedResources = new Set<string>();
-      const queue: string[] = [startUrl];
+      
+      // If selectedUrls is provided, use those; otherwise start with startUrl
+      const queue: string[] = selectedUrls ? [...selectedUrls] : [startUrl];
       const origin = new URL(startUrl).origin;
+      
+      // Flag to indicate if we're in selective mode (user pre-selected URLs)
+      const isSelectiveMode = selectedUrls !== null;
 
       // Track where each URL was discovered (referrer tracking)
       // Map: URL -> array of references (pages that link to this URL)
@@ -396,11 +457,17 @@ export async function GET(request: NextRequest) {
       let totalCrawled = 0;
       let brokenLinksCount = 0;
       let brokenImagesCount = 0;
+      let navigationIssuesCount = 0;
       const BATCH_SIZE = 100;
-      const MAX_PAGES = 1000; // Safety limit
 
       // Track current page URL for context
       let currentPageUrl = startUrl;
+      
+      // Track if this is the first page (for header link handling)
+      let isFirstPage = true;
+      
+      // Flag to check if sitemap was provided (affects header link behavior)
+      const hasSitemap = !!sitemapUrl;
 
       // Helper to register a link reference
       const registerLink = (url: string, ref: LinkReference) => {
@@ -419,8 +486,8 @@ export async function GET(request: NextRequest) {
         return linkRegistry.get(url) || [];
       };
 
-      // Load sitemap if provided
-      if (sitemapUrl) {
+      // Load sitemap if provided (only if not in selective mode)
+      if (sitemapUrl && !isSelectiveMode) {
         sendEvent({ type: "log", message: `📄 Loading sitemap: ${sitemapUrl}` });
         try {
           const xml = await fetchSitemap(sitemapUrl);
@@ -738,10 +805,10 @@ export async function GET(request: NextRequest) {
       });
 
       // Crawl loop
-      while (queue.length && totalCrawled < MAX_PAGES) {
+      while (queue.length) {
         let batchCount = 0;
 
-        while (queue.length && batchCount < BATCH_SIZE && totalCrawled < MAX_PAGES) {
+        while (queue.length && batchCount < BATCH_SIZE) {
           const url = queue.shift();
 
           if (!url || visited.has(url)) continue;
@@ -863,27 +930,239 @@ export async function GET(request: NextRequest) {
               .filter((l) => l.href.startsWith(origin))
               .filter((l) => !isHashOnlyOrAnchor(l.href)); // Skip hash-only anchors
 
+            // Count header vs non-header links for logging
+            const headerLinks = internalLinks.filter((l) => l.isInHeader);
+            const contentLinks = internalLinks.filter((l) => !l.isInHeader);
+            
+            // Count external links
+            const allExternalLinks = links.filter((l) => {
+              try {
+                const linkUrl = new URL(l.href);
+                return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && 
+                       !l.href.startsWith(origin);
+              } catch {
+                return false;
+              }
+            });
+
             sendEvent({
               type: "log",
-              message: `🔗 Found ${links.length} links (${internalLinks.length} internal)`,
+              message: `🔗 Found ${links.length} links (${internalLinks.length} internal: ${contentLinks.length} content, ${headerLinks.length} header/nav | ${allExternalLinks.length} external)`,
             });
+
+            // Collect links to validate (links that won't be crawled but need checking)
+            const linksToValidate: Array<{ url: string; text: string; context: string }> = [];
 
             // Register and queue internal links
             for (const link of internalLinks) {
               // Clean URL by removing hash fragments
               const cleanedUrl = cleanUrl(link.href);
               
-              // Register where this link was found
+              // Handle header/nav links specially:
+              // - If sitemap provided: skip header links entirely (don't check, don't queue)
+              // - If no sitemap: only add header links to queue from first page
+              if (link.isInHeader) {
+                if (hasSitemap) {
+                  // Skip header links when sitemap is provided (nav rarely breaks)
+                  continue;
+                } else if (!isFirstPage) {
+                  // No sitemap, but not first page - skip header links
+                  continue;
+                }
+                // No sitemap + first page: fall through to add to queue
+              }
+              
+              // Register where this link was found (for broken link tracking)
               registerLink(cleanedUrl, {
                 foundOnPage: url,
                 linkText: link.text,
                 elementContext: link.context,
               });
               
-              // Add to queue if not visited (use cleaned URL)
-              if (!visited.has(cleanedUrl) && !queue.includes(cleanedUrl)) {
+              // Only add to queue if not in selective mode (user didn't pre-select URLs)
+              // In selective mode, only crawl the URLs the user selected
+              if (!isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl)) {
                 queue.push(cleanedUrl);
+              } else if (isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl) && !selectedUrls?.has(cleanedUrl)) {
+                // In selective mode, this link won't be crawled - add to validation list
+                // But skip if the URL is in the sitemap (allDiscoveredUrls) - those are known good URLs
+                if (!checkedResources.has(cleanedUrl) && !allDiscoveredUrls?.has(cleanedUrl)) {
+                  linksToValidate.push({
+                    url: cleanedUrl,
+                    text: link.text,
+                    context: link.context,
+                  });
+                }
               }
+            }
+            
+            // Mark first page as done after processing
+            if (isFirstPage) {
+              isFirstPage = false;
+            }
+
+            // Validate links that won't be crawled (in selective/sitemap mode)
+            if (linksToValidate.length > 0) {
+              const totalToValidate = linksToValidate.length;
+              sendEvent({
+                type: "log",
+                message: `🔎 Validating ${totalToValidate} links not in crawl queue...`,
+              });
+
+              let validatedCount = 0;
+              let brokenCount = 0;
+              let skippedCount = 0;
+
+              for (let i = 0; i < linksToValidate.length; i++) {
+                const link = linksToValidate[i];
+                
+                if (checkedResources.has(link.url)) {
+                  skippedCount++;
+                  continue;
+                }
+                checkedResources.add(link.url);
+                
+                // Show which link is being checked
+                sendEvent({
+                  type: "log",
+                  message: `   ↳ [${i + 1}/${totalToValidate}] Checking: ${link.url}`,
+                });
+
+                const { status, ok } = await checkUrlStatus(link.url);
+                validatedCount++;
+
+                if (!ok && status >= 400) {
+                  brokenCount++;
+                  brokenLinksCount++;
+                  const brokenLink: BrokenLink = {
+                    url: link.url,
+                    statusCode: status,
+                    foundOnPage: url,
+                    linkText: link.text,
+                    elementContext: link.context,
+                    timestamp: new Date().toISOString(),
+                  };
+                  sendEvent({
+                    type: "broken_link",
+                    message: `   ↳ ❌ [${status}] ${link.url}`,
+                    data: brokenLink,
+                  });
+                } else if (status === 0) {
+                  // Connection failed / timeout - report as navigation issue
+                  navigationIssuesCount++;
+                  const navIssue: NavigationIssue = {
+                    url: link.url,
+                    reason: "Connection failed or timeout",
+                    foundOnPage: url,
+                    linkText: link.text,
+                    elementContext: link.context,
+                    timestamp: new Date().toISOString(),
+                  };
+                  sendEvent({
+                    type: "navigation_issue",
+                    message: `   ↳ ⚠️ [Timeout] ${link.url}`,
+                    data: navIssue,
+                  });
+                } else {
+                  // Link is OK - show success status
+                  sendEvent({
+                    type: "log",
+                    message: `   ↳ ✓ [${status}] OK`,
+                  });
+                }
+              }
+
+              sendEvent({
+                type: "log",
+                message: `✅ Link validation complete: ${validatedCount} checked, ${brokenCount} broken${skippedCount > 0 ? `, ${skippedCount} skipped (already checked)` : ""}`,
+              });
+            }
+
+            // Check external links for broken links
+            const externalLinks = links
+              .filter((l) => {
+                try {
+                  const linkUrl = new URL(l.href);
+                  // Must be http/https and not same origin
+                  return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && 
+                         !l.href.startsWith(origin);
+                } catch {
+                  return false;
+                }
+              })
+              .filter((l) => !l.isInHeader) // Skip header/nav external links (usually social icons)
+              .filter((l) => !shouldSkipExternalCheck(l.href)); // Skip social media etc.
+
+            if (externalLinks.length > 0) {
+              sendEvent({
+                type: "log",
+                message: `🌐 Checking ${externalLinks.length} external links...`,
+              });
+
+              let externalChecked = 0;
+              let externalBroken = 0;
+
+              for (let i = 0; i < externalLinks.length; i++) {
+                const link = externalLinks[i];
+                
+                // Skip if already checked
+                if (checkedResources.has(link.href)) {
+                  continue;
+                }
+                checkedResources.add(link.href);
+
+                sendEvent({
+                  type: "log",
+                  message: `   ↳ [${i + 1}/${externalLinks.length}] Checking: ${link.href}`,
+                });
+
+                const { status, ok } = await checkUrlStatus(link.href);
+                externalChecked++;
+
+                if (!ok && status >= 400) {
+                  externalBroken++;
+                  brokenLinksCount++;
+                  const brokenLink: BrokenLink = {
+                    url: link.href,
+                    statusCode: status,
+                    foundOnPage: url,
+                    linkText: link.text,
+                    elementContext: link.context,
+                    timestamp: new Date().toISOString(),
+                  };
+                  sendEvent({
+                    type: "broken_link",
+                    message: `   ↳ ❌ [${status}] ${link.href}`,
+                    data: brokenLink,
+                  });
+                } else if (status === 0) {
+                  // Connection failed / timeout - report as navigation issue for external links
+                  navigationIssuesCount++;
+                  const navIssue: NavigationIssue = {
+                    url: link.href,
+                    reason: "Connection failed or timeout (external)",
+                    foundOnPage: url,
+                    linkText: link.text,
+                    elementContext: link.context,
+                    timestamp: new Date().toISOString(),
+                  };
+                  sendEvent({
+                    type: "navigation_issue",
+                    message: `   ↳ ⚠️ [Timeout] ${link.href}`,
+                    data: navIssue,
+                  });
+                } else {
+                  sendEvent({
+                    type: "log",
+                    message: `   ↳ ✓ [${status}] OK`,
+                  });
+                }
+              }
+
+              sendEvent({
+                type: "log",
+                message: `✅ External links: ${externalChecked} checked, ${externalBroken} broken`,
+              });
             }
 
             // Extract and check all images on the page (DOM-based check)
@@ -961,27 +1240,35 @@ export async function GET(request: NextRequest) {
               message: `⚠️ Navigation error: ${err.message} | Page: ${url}`,
             });
             
-            // If navigation failed, still report with referrer info
+            // If navigation failed, report as navigation issue (not broken link)
             const references = getLinkReferences(url);
             if (references.length > 0 && !checkedResources.has(url)) {
               checkedResources.add(url);
               for (const ref of references) {
-                brokenLinksCount++;
-                const brokenLink: BrokenLink = {
+                navigationIssuesCount++;
+                const navIssue: NavigationIssue = {
                   url: url,
-                  statusCode: 0,
+                  reason: err.message || "Navigation failed",
                   foundOnPage: ref.foundOnPage,
                   linkText: ref.linkText,
                   elementContext: ref.elementContext,
                   timestamp: new Date().toISOString(),
                 };
                 sendEvent({
-                  type: "broken_link",
-                  message: `🔗❌ Navigation failed: ${url} | Linked from: ${ref.foundOnPage}`,
-                  data: brokenLink,
+                  type: "navigation_issue",
+                  message: `⚠️ Navigation issue: ${url} | Reason: ${err.message}`,
+                  data: navIssue,
                 });
               }
             }
+          }
+
+          // Show pages remaining after each page is crawled
+          if (queue.length > 0) {
+            sendEvent({
+              type: "log",
+              message: `📋 ${queue.length} pages remaining in queue`,
+            });
           }
         }
 
@@ -1002,7 +1289,7 @@ export async function GET(request: NextRequest) {
 
       sendEvent({
         type: "done",
-        message: `\n🏁 Crawl complete. Pages: ${visited.size} | Broken Links: ${brokenLinksCount} | Broken Images: ${brokenImagesCount}`,
+        message: `\n🏁 Crawl complete. Pages: ${visited.size} | Broken Links: ${brokenLinksCount} | Broken Images: ${brokenImagesCount} | Nav Issues: ${navigationIssuesCount}`,
       });
     } catch (err: any) {
       sendEvent({

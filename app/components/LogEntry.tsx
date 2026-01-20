@@ -85,7 +85,7 @@ export function LogEntry({ log, index, currentUrl, isDark }: LogEntryProps) {
         )}
         {!isCurrentLog && (<button
           onClick={handleCopy}
-          className={`opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md ${
+          className={`cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md ${
             isDark
               ? "hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200"
               : "hover:bg-slate-200 text-slate-500 hover:text-slate-700"
