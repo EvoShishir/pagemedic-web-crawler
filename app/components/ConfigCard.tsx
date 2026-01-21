@@ -9,7 +9,7 @@ interface ConfigCardProps {
   onToggleTheme: () => void;
   stats: CrawlerStats;
   isCrawling: boolean;
-  onStartCrawl: (startUrl: string, sitemapUrl: string) => void;
+  onStartCrawl: (startUrl: string, sitemapUrl: string, cssSelector: string) => void;
   onStop: () => void;
 }
 
@@ -23,11 +23,12 @@ export function ConfigCard({
 }: ConfigCardProps) {
   const [startUrl, setStartUrl] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
+  const [cssSelector, setCssSelector] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isCrawling) {
-    onStartCrawl(startUrl, sitemapUrl);
+    onStartCrawl(startUrl, sitemapUrl, cssSelector);
     }
   };
 
@@ -95,6 +96,42 @@ export function ConfigCard({
                   : "bg-white border-slate-200 text-slate-900 placeholder-slate-400"
               }`}
             />
+          </div>
+
+          <div className="space-y-2">
+            <label
+              className={`block text-sm font-medium ${
+                isDark ? "text-zinc-400" : "text-slate-600"
+              }`}
+            >
+              CSS Selector
+              <span
+                className={`ml-1 text-xs ${
+                  isDark ? "text-zinc-500" : "text-slate-400"
+                }`}
+              >
+                (optional)
+              </span>
+            </label>
+            <input
+              type="text"
+              value={cssSelector}
+              onChange={(e) => setCssSelector(e.target.value)}
+              placeholder=".main-content, #article-body"
+              disabled={isCrawling}
+              className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm ${
+                isDark
+                  ? "bg-zinc-900 border-zinc-600/80 text-white placeholder-zinc-500"
+                  : "bg-white border-slate-200 text-slate-900 placeholder-slate-400"
+              }`}
+            />
+            <p
+              className={`text-xs ${
+                isDark ? "text-zinc-500" : "text-slate-400"
+              }`}
+            >
+              Only check links & images within this selector
+            </p>
           </div>
         </div>
 

@@ -15,7 +15,11 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 
 ### 🔗 Broken Link Detection
 - **Internal & External Links**: Checks both internal links and external links on your pages
-- **404 Detection**: Automatically finds broken links with HTTP 4xx/5xx status codes
+- **Status Code Categorization**: Filter by status code type with built-in tabs:
+  - **404 Not Found** — Truly broken links that need fixing
+  - **401 Unauthorized** — Pages requiring authentication
+  - **403 Forbidden** — Access denied (may be intentional)
+  - **5xx Server Errors** — Server-side issues
 - **Source Page Tracking**: Shows exactly which page contains the broken link
 - **Link Text & Context**: Displays the anchor text and HTML element location (nav, footer, etc.)
 - **Referrer Tracking**: When a page returns 404, see all pages that link to it
@@ -62,12 +66,14 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 
 ### ⚙️ Smart Crawling
 - **Sitemap Support**: Import URLs from sitemap.xml with sitemap index support
+- **CSS Selector Scoping**: Only check links & images within a specific selector (e.g., `.main-content`)
 - **No Page Limit**: Crawl your entire site without artificial limits
 - **Header Link Handling**: Intelligently handles navigation/header links
 - **SSL Certificate Handling**: Works with self-signed certificates
 - **Origin Isolation**: Only queues same-domain links for crawling
 - **Batch Processing**: Crawls in batches for efficiency
 - **Resource Type Detection**: Distinguishes between pages, images, and documents
+- **Detailed Link Tracking**: See what happens to each internal link (validated, in sitemap, skipped)
 
 ### 🛡️ False Positive Prevention
 - **Social Media Skip List**: Doesn't flag Twitter, LinkedIn, Facebook, etc. (they block bots)
@@ -93,11 +99,19 @@ Real-time crawling progress with live updates:
 - 📊 Queue and batch status
 
 ### Broken Links Panel
-Expandable cards showing:
-- Status code (404, 500, etc.)
+Categorized by status code with filterable tabs:
+- **All** — View all HTTP errors
+- **404** — Truly broken links (Not Found)
+- **401** — Authentication required
+- **403** — Access denied
+- **5xx** — Server errors
+
+Each card shows:
+- Status code with descriptive label
 - Broken URL (internal or external)
 - **Source page** (where to fix it)
 - Link text and element location
+- Color-coded by severity (red for 404, amber for auth, purple for server errors)
 
 ### Navigation Issues Panel
 Separate tracking for:
@@ -156,29 +170,44 @@ pnpm start
    - Example: `https://example.com/sitemap.xml`
    - Supports sitemap index files
 
-3. **Click "Start Crawl" or press Enter**
+3. **Enter CSS Selector** (optional)
+   - Only check links & images within specific elements
+   - Examples:
+     - `.main-content` — Only check inside elements with this class
+     - `#article-body` — Only check inside element with this ID
+     - `article, .post-content` — Multiple selectors supported
+   - Great for ignoring navigation, footer, and sidebar links
+
+4. **Click "Start Crawl" or press Enter**
    - PageMedic discovers all links first
    - Watch real-time discovery progress
 
-4. **Select Pages to Crawl**
+5. **Select Pages to Crawl**
    - Review discovered links in the preview
    - Use checkboxes or Shift+Click to select ranges
    - Click "Start Crawl" to begin
 
-5. **Review Issues**
+6. **Review Issues**
    - Switch between tabs: Activity Log, Broken Links, Broken Images, Console Errors, Nav Issues
+   - **Broken Links Tab**: Use sub-tabs to filter by status code (404, 401, 403, 5xx)
    - Click on any card to expand details
    - "FIX HERE" label shows which page to edit
    - Click source page link to visit it directly
 
-6. **Stop Anytime**
+7. **Stop Anytime**
    - Click "Stop" to halt crawling gracefully
 
 ### Understanding the Results
 
 #### Broken Links Panel
+Filter by status code using the tabs at the top:
+- **404 Not Found**: Pages that don't exist — fix or remove these links
+- **401 Unauthorized**: Pages requiring login — may not be broken
+- **403 Forbidden**: Access denied — could be intentional (admin areas)
+- **5xx Server Errors**: Server issues — usually temporary
+
 Each broken link shows:
-- **Status Code**: HTTP error code (404, 500, etc.)
+- **Status Code**: HTTP error code with descriptive label
 - **Broken URL**: The URL that returned an error (internal or external)
 - **Source Page**: The page containing the link (where you need to fix it!)
 - **Link Text**: The anchor text of the broken link
@@ -202,10 +231,13 @@ JavaScript and console errors:
 | Emoji | Meaning |
 |-------|---------|
 | 🚀 | PageMedic starting |
+| 🎯 | CSS selector active |
 | 📄 | Loading sitemap |
 | ✅ | Success/completion |
 | 🔍 | Currently crawling |
 | 🔗 | Link information |
+| ↳ | Internal link status details |
+| 🔎 | Validating links |
 | 🌐 | External link checking |
 | 🖼️ | Image information |
 | 🔗❌ | Broken link detected |
@@ -243,6 +275,24 @@ JavaScript and console errors:
 6. Client receives events → Updates UI in real-time
 
 ## Configuration
+
+### Input Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| Start URL | Yes | The URL to begin crawling from |
+| Sitemap URL | No | Path to sitemap.xml for comprehensive discovery |
+| CSS Selector | No | Scope link/image checking to specific elements |
+
+### CSS Selector Examples
+
+| Selector | Effect |
+|----------|--------|
+| `.main-content` | Only check links/images inside `.main-content` |
+| `#article-body` | Only check inside element with ID `article-body` |
+| `article` | Only check inside `<article>` elements |
+| `.content, main` | Check inside `.content` OR `<main>` |
+| `.wrapper .inner` | Check inside `.inner` that's inside `.wrapper` |
 
 ### Adjustable Parameters
 
@@ -331,6 +381,7 @@ app/
 - [ ] Historical crawl comparison
 - [ ] Custom ignore patterns
 - [ ] Webhook notifications
+- [ ] Force validation of sitemap links (currently assumed valid)
 
 ## Contributing
 

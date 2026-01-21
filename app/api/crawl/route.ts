@@ -239,8 +239,17 @@ async function checkUrlStatus(
   });
 }
 
-// Extract link info from page
-async function extractLinksWithContext(page: Page): Promise<
+// Build a scoped selector that handles comma-separated selectors properly
+// e.g., ".main, #content" becomes ".main a[href], #content a[href]"
+function buildScopedSelector(baseSelector: string, targetSelector: string): string {
+  return baseSelector
+    .split(",")
+    .map((s) => `${s.trim()} ${targetSelector}`)
+    .join(", ");
+}
+
+// Extract link info from page (optionally scoped to a CSS selector)
+async function extractLinksWithContext(page: Page, cssSelector?: string): Promise<
   Array<{
     href: string;
     text: string;
@@ -248,7 +257,8 @@ async function extractLinksWithContext(page: Page): Promise<
     isInHeader: boolean;
   }>
 > {
-  return page.$$eval("a[href]", (anchors) => {
+  const selector = cssSelector ? buildScopedSelector(cssSelector, "a[href]") : "a[href]";
+  return page.$$eval(selector, (anchors) => {
     return anchors.map((a) => {
       const anchor = a as HTMLAnchorElement;
       const parent = anchor.closest("nav, header, footer, article, section, aside, main");
@@ -270,8 +280,8 @@ async function extractLinksWithContext(page: Page): Promise<
   });
 }
 
-// Extract image info from page
-async function extractImagesWithContext(page: Page): Promise<
+// Extract image info from page (optionally scoped to a CSS selector)
+async function extractImagesWithContext(page: Page, cssSelector?: string): Promise<
   Array<{
     src: string;
     alt: string;
@@ -280,7 +290,8 @@ async function extractImagesWithContext(page: Page): Promise<
     complete: boolean;
   }>
 > {
-  return page.$$eval("img", (images) => {
+  const selector = cssSelector ? buildScopedSelector(cssSelector, "img") : "img";
+  return page.$$eval(selector, (images) => {
     return images.map((img) => {
       const image = img as HTMLImageElement;
       const parent = image.closest("figure, article, section, header, footer, aside, main, div");
@@ -394,7 +405,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { startUrl, sitemapUrl, selectedUrls: selectedUrlsArray, allDiscoveredUrls: allDiscoveredArray } = body;
+    const { startUrl, sitemapUrl, cssSelector, selectedUrls: selectedUrlsArray, allDiscoveredUrls: allDiscoveredArray } = body;
 
     if (!startUrl) {
       return new Response("Missing startUrl parameter", { status: 400 });
@@ -412,7 +423,7 @@ export async function POST(request: NextRequest) {
       allDiscoveredUrls = new Set(allDiscoveredArray.map((url: string) => cleanUrl(url)));
     }
 
-    return handleCrawl(startUrl, sitemapUrl || null, selectedUrls, allDiscoveredUrls);
+    return handleCrawl(startUrl, sitemapUrl || null, selectedUrls, allDiscoveredUrls, cssSelector || undefined);
   } catch (err: any) {
     return new Response(`Invalid request body: ${err.message}`, { status: 400 });
   }
@@ -422,7 +433,8 @@ function handleCrawl(
   startUrl: string,
   sitemapUrl: string | null,
   selectedUrls: Set<string> | null,
-  allDiscoveredUrls: Set<string> | null = null
+  allDiscoveredUrls: Set<string> | null = null,
+  cssSelector?: string
 ) {
 
   const { stream, sendEvent, close } = createSSEResponse();
@@ -433,6 +445,9 @@ function handleCrawl(
 
     try {
       sendEvent({ type: "log", message: "🚀 Starting crawler..." });
+      if (cssSelector) {
+        sendEvent({ type: "log", message: `🎯 CSS selector active: ${cssSelector}` });
+      }
 
       browser = await chromium.launch({ headless: true });
       const context = await browser.newContext({
@@ -924,8 +939,8 @@ function handleCrawl(
               continue;
             }
 
-            // Extract and check all links on the page
-            const links = await extractLinksWithContext(page);
+            // Extract and check all links on the page (scoped to CSS selector if provided)
+            const links = await extractLinksWithContext(page, cssSelector);
             const internalLinks = links
               .filter((l) => l.href.startsWith(origin))
               .filter((l) => !isHashOnlyOrAnchor(l.href)); // Skip hash-only anchors
@@ -952,6 +967,10 @@ function handleCrawl(
 
             // Collect links to validate (links that won't be crawled but need checking)
             const linksToValidate: Array<{ url: string; text: string; context: string }> = [];
+            let skippedHeaderLinks = 0;
+            let skippedAlreadyVisited = 0;
+            let skippedInSitemap = 0;
+            let addedToQueue = 0;
 
             // Register and queue internal links
             for (const link of internalLinks) {
@@ -964,9 +983,11 @@ function handleCrawl(
               if (link.isInHeader) {
                 if (hasSitemap) {
                   // Skip header links when sitemap is provided (nav rarely breaks)
+                  skippedHeaderLinks++;
                   continue;
                 } else if (!isFirstPage) {
                   // No sitemap, but not first page - skip header links
+                  skippedHeaderLinks++;
                   continue;
                 }
                 // No sitemap + first page: fall through to add to queue
@@ -983,10 +1004,18 @@ function handleCrawl(
               // In selective mode, only crawl the URLs the user selected
               if (!isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl)) {
                 queue.push(cleanedUrl);
-              } else if (isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl) && !selectedUrls?.has(cleanedUrl)) {
-                // In selective mode, this link won't be crawled - add to validation list
-                // But skip if the URL is in the sitemap (allDiscoveredUrls) - those are known good URLs
-                if (!checkedResources.has(cleanedUrl) && !allDiscoveredUrls?.has(cleanedUrl)) {
+                addedToQueue++;
+              } else if (isSelectiveMode) {
+                // In selective mode, check if we should validate this link
+                if (visited.has(cleanedUrl) || checkedResources.has(cleanedUrl)) {
+                  skippedAlreadyVisited++;
+                } else if (selectedUrls?.has(cleanedUrl)) {
+                  // Will be crawled as part of selection - skip
+                } else if (allDiscoveredUrls?.has(cleanedUrl)) {
+                  // In sitemap, assume it's valid
+                  skippedInSitemap++;
+                } else if (!queue.includes(cleanedUrl)) {
+                  // Not in sitemap, not selected, not visited - validate it
                   linksToValidate.push({
                     url: cleanedUrl,
                     text: link.text,
@@ -994,6 +1023,26 @@ function handleCrawl(
                   });
                 }
               }
+            }
+
+            // Log what happened to the internal links
+            if (isSelectiveMode) {
+              const parts = [];
+              if (linksToValidate.length > 0) parts.push(`${linksToValidate.length} to validate`);
+              if (skippedInSitemap > 0) parts.push(`${skippedInSitemap} in sitemap (assumed valid)`);
+              if (skippedAlreadyVisited > 0) parts.push(`${skippedAlreadyVisited} already checked`);
+              if (skippedHeaderLinks > 0) parts.push(`${skippedHeaderLinks} header/nav skipped`);
+              if (parts.length > 0) {
+                sendEvent({
+                  type: "log",
+                  message: `   ↳ Internal links: ${parts.join(", ")}`,
+                });
+              }
+            } else if (addedToQueue > 0) {
+              sendEvent({
+                type: "log",
+                message: `   ↳ Added ${addedToQueue} new internal links to crawl queue`,
+              });
             }
             
             // Mark first page as done after processing
@@ -1165,8 +1214,8 @@ function handleCrawl(
               });
             }
 
-            // Extract and check all images on the page (DOM-based check)
-            const images = await extractImagesWithContext(page);
+            // Extract and check all images on the page (DOM-based check, scoped to CSS selector if provided)
+            const images = await extractImagesWithContext(page, cssSelector);
             sendEvent({
               type: "log",
               message: `🖼️ Found ${images.length} images`,

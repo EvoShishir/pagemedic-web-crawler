@@ -148,9 +148,19 @@ function createSSEResponse() {
   return { stream, sendEvent, close };
 }
 
-// Extract links from page
-async function extractLinksFromPage(page: Page): Promise<string[]> {
-  return page.$$eval("a[href]", (anchors) => {
+// Build a scoped selector that handles comma-separated selectors properly
+// e.g., ".main, #content" becomes ".main a[href], #content a[href]"
+function buildScopedSelector(baseSelector: string, targetSelector: string): string {
+  return baseSelector
+    .split(",")
+    .map((s) => `${s.trim()} ${targetSelector}`)
+    .join(", ");
+}
+
+// Extract links from page (optionally scoped to a CSS selector)
+async function extractLinksFromPage(page: Page, cssSelector?: string): Promise<string[]> {
+  const selector = cssSelector ? buildScopedSelector(cssSelector, "a[href]") : "a[href]";
+  return page.$$eval(selector, (anchors) => {
     return anchors.map((a) => (a as HTMLAnchorElement).href);
   });
 }
@@ -159,6 +169,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const startUrl = searchParams.get("startUrl");
   const sitemapUrl = searchParams.get("sitemapUrl");
+  const cssSelector = searchParams.get("cssSelector") || undefined;
 
   if (!startUrl) {
     return new Response("Missing startUrl parameter", { status: 400 });
@@ -364,7 +375,7 @@ export async function GET(request: NextRequest) {
               timeout: 15000,
         });
 
-        const links = await extractLinksFromPage(page);
+        const links = await extractLinksFromPage(page, cssSelector);
 
         for (const link of links) {
           const cleanedLink = cleanUrl(link);

@@ -35,6 +35,7 @@ export function useCrawler() {
   const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set());
   const [pendingStartUrl, setPendingStartUrl] = useState<string>("");
   const [pendingSitemapUrl, setPendingSitemapUrl] = useState<string>("");
+  const [pendingCssSelector, setPendingCssSelector] = useState<string>("");
   const [pendingResetCallback, setPendingResetCallback] = useState<(() => void) | null>(null);
 
   // Discovery progress state
@@ -69,12 +70,13 @@ export function useCrawler() {
     setSelectedLinks(new Set());
     setPendingStartUrl("");
     setPendingSitemapUrl("");
+    setPendingCssSelector("");
     setPendingResetCallback(null);
   }, [discoveryEventSource]);
 
   // Discover links (first phase) - now uses SSE
   const discoverLinks = useCallback(
-    (startUrl: string, sitemapUrl: string, onResetAutoScroll?: () => void) => {
+    (startUrl: string, sitemapUrl: string, cssSelector: string, onResetAutoScroll?: () => void) => {
       if (!startUrl) {
         showAlert("Missing URL", "Please enter a start URL to begin discovery.", "warning");
         return;
@@ -88,6 +90,7 @@ export function useCrawler() {
       setPhase("discovering");
       setPendingStartUrl(startUrl);
       setPendingSitemapUrl(sitemapUrl);
+      setPendingCssSelector(cssSelector);
       setPendingResetCallback(() => onResetAutoScroll || null);
       setDiscoveryProgress({
         message: "Starting discovery...",
@@ -100,6 +103,9 @@ export function useCrawler() {
         const params = new URLSearchParams({ startUrl });
         if (sitemapUrl) {
           params.append("sitemapUrl", sitemapUrl);
+        }
+        if (cssSelector) {
+          params.append("cssSelector", cssSelector);
         }
 
       const es = new EventSource(`/api/discover?${params.toString()}`);
@@ -179,6 +185,7 @@ export function useCrawler() {
           body: JSON.stringify({
             startUrl: pendingStartUrl,
             sitemapUrl: pendingSitemapUrl || undefined,
+            cssSelector: pendingCssSelector || undefined,
             selectedUrls: [...selectedLinks],
             // Pass all discovered URLs so sitemap links can be skipped from validation
             allDiscoveredUrls: discoveredLinks,
@@ -278,7 +285,7 @@ export function useCrawler() {
 
     // Store abort controller to allow stopping
     setEventSource({ close: () => abortController.abort() } as EventSource);
-  }, [selectedLinks, pendingStartUrl, pendingSitemapUrl, pendingResetCallback, showAlert]);
+  }, [selectedLinks, pendingStartUrl, pendingSitemapUrl, pendingCssSelector, pendingResetCallback, discoveredLinks, showAlert]);
 
   // Cancel link preview
   const cancelPreview = useCallback(() => {
@@ -287,6 +294,7 @@ export function useCrawler() {
     setSelectedLinks(new Set());
     setPendingStartUrl("");
     setPendingSitemapUrl("");
+    setPendingCssSelector("");
     setPendingResetCallback(null);
     setDiscoveryProgress(null);
   }, []);

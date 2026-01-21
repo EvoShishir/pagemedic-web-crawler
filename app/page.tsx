@@ -56,8 +56,8 @@ export default function Home() {
   const stats = useStats(logs, brokenLinks, brokenImages, consoleErrors, navigationIssues);
   const { containerRef, handleScroll, resetAutoScroll } = useAutoScroll([logs]);
 
-  const handleStart = (startUrl: string, sitemapUrl: string) => {
-    discoverLinks(startUrl, sitemapUrl, resetAutoScroll);
+  const handleStart = (startUrl: string, sitemapUrl: string, cssSelector: string) => {
+    discoverLinks(startUrl, sitemapUrl, cssSelector, resetAutoScroll);
   };
 
   const isDisabled = phase === "discovering" || phase === "crawling";
