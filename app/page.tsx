@@ -6,7 +6,6 @@ import { useStats } from "./hooks/useStats";
 import { useAutoScroll } from "./hooks/useAutoScroll";
 import { ConfigCard } from "./components/ConfigCard";
 import { ContentPanel } from "./components/ContentPanel";
-import { Footer } from "./components/Footer";
 import { Header } from "./components/Header";
 import { LinkPreviewPanel } from "./components/LinkPreviewPanel";
 import { 
@@ -108,7 +107,7 @@ export default function Home() {
 
         {phase === "discovering" ? (
           <section
-            className={`h-[calc(100vh-138px)] md:col-span-2 rounded-2xl overflow-hidden border ${
+            className={`h-[calc(100vh-100px)] md:col-span-2 rounded-2xl overflow-hidden border ${
               isDark
                 ? "bg-zinc-800/80 border-zinc-600/80"
                 : "bg-white/80 border-slate-200"
@@ -329,8 +328,6 @@ export default function Home() {
           />
         )}
       </main>
-
-      <Footer isDark={isDark} />
 
       {/* Alert Dialog */}
       <AlertDialog open={alertState.isOpen} onOpenChange={(open) => !open && closeAlert()}>

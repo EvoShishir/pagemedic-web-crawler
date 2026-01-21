@@ -45,7 +45,27 @@ export function Header({ isDark, onToggleTheme }: HeaderProps) {
             </p>
           </div>
         </div>
-        <ThemeToggle isDark={isDark} onToggle={onToggleTheme} />
+        <div className="flex items-center gap-3">
+          <span
+            className={`hidden sm:inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium border ${
+              isDark
+                ? "bg-zinc-900/80 border-zinc-700"
+                : "bg-white border-slate-300"
+            }`}
+          >
+            <span className={isDark ? "text-zinc-500" : "text-slate-400"}>
+              Developed By
+            </span>
+            <span
+              className={`ml-1 underline underline-offset-2 ${
+                isDark ? "text-indigo-400" : "text-indigo-500"
+              }`}
+            >
+              <a href="https://atefarmanshishir.netlify.app/">EvoSHiSHiR</a>
+            </span>
+          </span>
+          <ThemeToggle isDark={isDark} onToggle={onToggleTheme} />
+        </div>
       </div>
     </div>
   );

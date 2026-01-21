@@ -34,12 +34,16 @@ export function ConfigCard({
 
   return (
     <section
-      className={`md:col-span-1 rounded-2xl p-6 border transition-colors ${
+      className={`h-[calc(100vh-100px)] overflow-auto md:col-span-1 rounded-2xl p-6 border transition-colors ${
         isDark
           ? "bg-zinc-800/80 border-zinc-600/80 glow-primary-subtle"
           : "bg-white/80 border-slate-200 glow-primary-subtle-light"
       }`}
     >
+      <div className="mb-4">
+        <StatsGrid stats={stats} isDark={isDark} />
+      </div>
+      
       <form onSubmit={handleSubmit}>
         {/* <Header isDark={isDark} onToggleTheme={onToggleTheme} /> */}
 
@@ -143,7 +147,7 @@ export function ConfigCard({
         />
       </form>
 
-        <StatsGrid stats={stats} isDark={isDark} />
+        {/* <StatsGrid stats={stats} isDark={isDark} /> */}
     </section>
   );
 }

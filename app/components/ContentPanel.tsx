@@ -245,7 +245,7 @@ export function ContentPanel({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`h-[calc(100vh-197px)] overflow-y-auto ${
+        className={`h-[calc(100vh-161px)] overflow-y-auto ${
           isDark
             ? "custom-scrollbar-dark bg-zinc-900"
             : "custom-scrollbar-light bg-slate-50"

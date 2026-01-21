@@ -110,7 +110,7 @@ export function ActivityLog({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`h-[calc(100vh-200px)] overflow-y-auto ${
+        className={`h-[calc(100vh-176px)] overflow-y-auto ${
           isDark
             ? "custom-scrollbar-dark bg-zinc-900"
             : "custom-scrollbar-light bg-slate-50"

@@ -168,7 +168,7 @@ export function LinkPreviewPanel({
 
   return (
     <div
-      className={`flex flex-col h-[calc(100vh-138px)] ${
+      className={`flex flex-col h-[calc(100vh-102px)] ${
         isDark ? "bg-zinc-900" : "bg-slate-50"
       }`}
     >
