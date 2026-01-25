@@ -8,15 +8,15 @@ import { ConfigCard } from "./components/ConfigCard";
 import { ContentPanel } from "./components/ContentPanel";
 import { Header } from "./components/Header";
 import { LinkPreviewPanel } from "./components/LinkPreviewPanel";
-import { 
-  HiOutlineMagnifyingGlass, 
-  HiOutlineDocumentText, 
-  HiOutlineCheckCircle, 
-  HiOutlineExclamationTriangle, 
-  HiOutlineInformationCircle, 
+import {
+  HiOutlineMagnifyingGlass,
+  HiOutlineDocumentText,
+  HiOutlineCheckCircle,
+  HiOutlineExclamationTriangle,
+  HiOutlineInformationCircle,
   HiOutlineGlobeAlt,
   HiOutlineClock,
-  HiOutlineRocketLaunch
+  HiOutlineRocketLaunch,
 } from "react-icons/hi2";
 import {
   AlertDialog,
@@ -37,6 +37,7 @@ export default function Home() {
     consoleErrors,
     navigationIssues,
     isCrawling,
+    isDiscovering,
     currentUrl,
     handleStop,
     // Link preview
@@ -52,19 +53,29 @@ export default function Home() {
     alertState,
     closeAlert,
   } = useCrawler();
-  const stats = useStats(logs, brokenLinks, brokenImages, consoleErrors, navigationIssues);
+  const stats = useStats(
+    logs,
+    brokenLinks,
+    brokenImages,
+    consoleErrors,
+    navigationIssues
+  );
   const { containerRef, handleScroll, resetAutoScroll } = useAutoScroll([logs]);
 
-  const handleStart = (startUrl: string, sitemapUrl: string, cssSelector: string) => {
+  const handleStart = (
+    startUrl: string,
+    sitemapUrl: string,
+    cssSelector: string
+  ) => {
     discoverLinks(startUrl, sitemapUrl, cssSelector, resetAutoScroll);
   };
 
-  const isDisabled = phase === "discovering" || phase === "crawling";
-
   // Get phase icon component
   const getPhaseIcon = (phaseType: string) => {
-    const iconClass = `w-6 h-6 ${isDark ? "text-indigo-400" : "text-indigo-600"}`;
-    
+    const iconClass = `w-6 h-6 ${
+      isDark ? "text-indigo-400" : "text-indigo-600"
+    }`;
+
     switch (phaseType) {
       case "starting":
         return <HiOutlineRocketLaunch className={iconClass} />;
@@ -72,9 +83,21 @@ export default function Home() {
       case "sitemap_detect":
         return <HiOutlineDocumentText className={iconClass} />;
       case "sitemap_done":
-        return <HiOutlineCheckCircle className={`w-6 h-6 ${isDark ? "text-emerald-400" : "text-emerald-600"}`} />;
+        return (
+          <HiOutlineCheckCircle
+            className={`w-6 h-6 ${
+              isDark ? "text-emerald-400" : "text-emerald-600"
+            }`}
+          />
+        );
       case "sitemap_error":
-        return <HiOutlineExclamationTriangle className={`w-6 h-6 ${isDark ? "text-amber-400" : "text-amber-600"}`} />;
+        return (
+          <HiOutlineExclamationTriangle
+            className={`w-6 h-6 ${
+              isDark ? "text-amber-400" : "text-amber-600"
+            }`}
+          />
+        );
       case "sitemap_not_found":
         return <HiOutlineInformationCircle className={iconClass} />;
       case "browser":
@@ -100,7 +123,8 @@ export default function Home() {
           isDark={isDark}
           onToggleTheme={toggleTheme}
           stats={stats}
-          isCrawling={isDisabled}
+          isCrawling={isCrawling}
+          isDiscovering={isDiscovering}
           onStartCrawl={handleStart}
           onStop={handleStop}
         />
@@ -116,13 +140,21 @@ export default function Home() {
             <div className="flex flex-col items-center justify-center h-full py-16 px-8">
               {/* Spinner */}
               <div className="relative mb-8">
-              <div
+                <div
                   className={`w-20 h-20 rounded-full border-4 border-t-transparent animate-spin ${
-                  isDark ? "border-indigo-500" : "border-indigo-400"
-                }`}
-              />
+                    isDark ? "border-indigo-500" : "border-indigo-400"
+                  }`}
+                />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  {discoveryProgress ? getPhaseIcon(discoveryProgress.phase) : <HiOutlineMagnifyingGlass className={`w-6 h-6 ${isDark ? "text-indigo-400" : "text-indigo-600"}`} />}
+                  {discoveryProgress ? (
+                    getPhaseIcon(discoveryProgress.phase)
+                  ) : (
+                    <HiOutlineMagnifyingGlass
+                      className={`w-6 h-6 ${
+                        isDark ? "text-indigo-400" : "text-indigo-600"
+                      }`}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -137,7 +169,7 @@ export default function Home() {
 
               {/* Status message */}
               <p
-                className={`text-sm mb-6 text-center max-w-md ${
+                className={`text-sm mb-6 text-center ${
                   isDark ? "text-zinc-400" : "text-slate-500"
                 }`}
               >
@@ -234,54 +266,58 @@ export default function Home() {
               )}
 
               {/* Progress indicator for page scanning (only when no sitemap) */}
-              {discoveryProgress?.pagesScanned !== undefined && discoveryProgress.pagesScanned > 0 && discoveryProgress.fromSitemap === 0 && (
-                <div className="w-full max-w-lg mb-6">
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <div
-                      className={`w-2 h-2 rounded-full animate-pulse ${
-                        isDark ? "bg-indigo-500" : "bg-indigo-400"
-                      }`}
-                    />
+              {discoveryProgress?.pagesScanned !== undefined &&
+                discoveryProgress.pagesScanned > 0 &&
+                discoveryProgress.fromSitemap === 0 && (
+                  <div className="w-full max-w-lg mb-6">
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                      <div
+                        className={`w-2 h-2 rounded-full animate-pulse ${
+                          isDark ? "bg-indigo-500" : "bg-indigo-400"
+                        }`}
+                      />
+                      <p
+                        className={`text-sm font-medium ${
+                          isDark ? "text-zinc-300" : "text-slate-600"
+                        }`}
+                      >
+                        Crawling all pages to discover links...
+                      </p>
+                    </div>
                     <p
-                      className={`text-sm font-medium ${
-                        isDark ? "text-zinc-300" : "text-slate-600"
+                      className={`text-xs text-center ${
+                        isDark ? "text-zinc-500" : "text-slate-400"
                       }`}
                     >
-                      Crawling all pages to discover links...
+                      {discoveryProgress.pagesScanned} pages scanned •{" "}
+                      {discoveryProgress.total} links found
                     </p>
                   </div>
-                  <p
-                    className={`text-xs text-center ${
-                      isDark ? "text-zinc-500" : "text-slate-400"
-                    }`}
-                  >
-                    {discoveryProgress.pagesScanned} pages scanned • {discoveryProgress.total} links found
-                  </p>
-                </div>
-              )}
+                )}
 
               {/* Progress bar for sitemap processing */}
-              {discoveryProgress?.phase === "sitemap" && discoveryProgress.message.includes("/") && (
-                <div className="w-full max-w-lg mb-6">
-                  <div
-                    className={`h-2 rounded-full overflow-hidden ${
-                      isDark ? "bg-zinc-700" : "bg-slate-200"
-                    }`}
-                  >
+              {discoveryProgress?.phase === "sitemap" &&
+                discoveryProgress.message.includes("/") && (
+                  <div className="w-full max-w-lg mb-6">
                     <div
-                      className="h-full bg-linear-to-r from-emerald-500 to-teal-500 transition-all duration-300 animate-pulse"
-                      style={{ width: "100%" }}
-                    />
+                      className={`h-2 rounded-full overflow-hidden ${
+                        isDark ? "bg-zinc-700" : "bg-slate-200"
+                      }`}
+                    >
+                      <div
+                        className="h-full bg-linear-to-r from-emerald-500 to-teal-500 transition-all duration-300 animate-pulse"
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                    <p
+                      className={`text-xs text-center mt-2 ${
+                        isDark ? "text-zinc-500" : "text-slate-400"
+                      }`}
+                    >
+                      Processing sitemap...
+                    </p>
                   </div>
-                  <p
-                    className={`text-xs text-center mt-2 ${
-                      isDark ? "text-zinc-500" : "text-slate-400"
-                    }`}
-                  >
-                    Processing sitemap...
-                  </p>
-                </div>
-              )}
+                )}
 
               {/* Cancel button */}
               <button
@@ -330,10 +366,19 @@ export default function Home() {
       </main>
 
       {/* Alert Dialog */}
-      <AlertDialog open={alertState.isOpen} onOpenChange={(open) => !open && closeAlert()}>
-        <AlertDialogContent className={isDark ? "bg-zinc-900 border-zinc-700" : ""}>
+      <AlertDialog
+        open={alertState.isOpen}
+        onOpenChange={(open) => !open && closeAlert()}
+      >
+        <AlertDialogContent
+          className={isDark ? "bg-zinc-900 border-zinc-700" : ""}
+        >
           <AlertDialogHeader>
-            <AlertDialogTitle className={`flex items-center gap-2 ${isDark ? "text-white" : ""}`}>
+            <AlertDialogTitle
+              className={`flex items-center gap-2 ${
+                isDark ? "text-white" : ""
+              }`}
+            >
               {alertState.type === "error" && (
                 <HiOutlineExclamationTriangle className="w-5 h-5 text-red-500" />
               )}

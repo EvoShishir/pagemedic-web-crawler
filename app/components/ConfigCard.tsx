@@ -9,6 +9,7 @@ interface ConfigCardProps {
   onToggleTheme: () => void;
   stats: CrawlerStats;
   isCrawling: boolean;
+  isDiscovering: boolean;
   onStartCrawl: (startUrl: string, sitemapUrl: string, cssSelector: string) => void;
   onStop: () => void;
 }
@@ -18,6 +19,7 @@ export function ConfigCard({
   onToggleTheme,
   stats,
   isCrawling,
+  isDiscovering,
   onStartCrawl,
   onStop,
 }: ConfigCardProps) {
@@ -25,9 +27,11 @@ export function ConfigCard({
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [cssSelector, setCssSelector] = useState("");
 
+  const isDisabled = isCrawling || isDiscovering;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isCrawling) {
+    if (!isDisabled) {
     onStartCrawl(startUrl, sitemapUrl, cssSelector);
     }
   };
@@ -64,7 +68,7 @@ export function ConfigCard({
                 setSitemapUrl(e.target.value.endsWith("/") ? e.target.value + "sitemap.xml" : e.target.value + "/sitemap.xml")
               }}
               placeholder="https://www.google.com"
-              disabled={isCrawling}
+              disabled={isDisabled}
               className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 isDark
                   ? "bg-zinc-900 border-zinc-600/80 text-white placeholder-zinc-500"
@@ -93,7 +97,7 @@ export function ConfigCard({
               value={sitemapUrl}
               onChange={(e) => setSitemapUrl(e.target.value)}
               placeholder="https://example.com/sitemap.xml"
-              disabled={isCrawling}
+              disabled={isDisabled}
               className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 isDark
                   ? "bg-zinc-900 border-zinc-600/80 text-white placeholder-zinc-500"
@@ -122,7 +126,7 @@ export function ConfigCard({
               value={cssSelector}
               onChange={(e) => setCssSelector(e.target.value)}
               placeholder=".main-content, #article-body"
-              disabled={isCrawling}
+              disabled={isDisabled}
               className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm ${
                 isDark
                   ? "bg-zinc-900 border-zinc-600/80 text-white placeholder-zinc-500"
@@ -141,6 +145,7 @@ export function ConfigCard({
 
         <CrawlButtons
           isCrawling={isCrawling}
+          isDiscovering={isDiscovering}
           startUrl={startUrl}
           onStop={onStop}
           isDark={isDark}
