@@ -7,9 +7,105 @@ import { BrokenLinksPanel } from "./BrokenLinksPanel";
 import { BrokenImagesPanel } from "./BrokenImagesPanel";
 import { ConsoleErrorsPanel } from "./ConsoleErrorsPanel";
 import { NavigationIssuesPanel } from "./NavigationIssuesPanel";
-import { BrokenLink, BrokenImage, ConsoleError, NavigationIssue } from "../types/crawler";
+import {
+  BrokenLink,
+  BrokenImage,
+  ConsoleError,
+  NavigationIssue,
+} from "../types/crawler";
 
-type TabType = "logs" | "broken-links" | "broken-images" | "console-errors" | "nav-issues";
+// Helper function to escape CSV values
+function escapeCSV(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+// Generate CSV content from issues grouped by page
+function generateCSV(
+  brokenLinks: BrokenLink[],
+  brokenImages: BrokenImage[],
+  consoleErrors: ConsoleError[],
+): string {
+  // Group all issues by page
+  const pageMap = new Map<
+    string,
+    {
+      links: string[];
+      images: string[];
+      errors: string[];
+    }
+  >();
+
+  // Process broken links
+  brokenLinks.forEach((link) => {
+    const page = link.foundOnPage;
+    if (!pageMap.has(page)) {
+      pageMap.set(page, { links: [], images: [], errors: [] });
+    }
+    pageMap.get(page)!.links.push(`${link.url} (${link.statusCode})`);
+  });
+
+  // Process broken images
+  brokenImages.forEach((image) => {
+    const page = image.foundOnPage;
+    if (!pageMap.has(page)) {
+      pageMap.set(page, { links: [], images: [], errors: [] });
+    }
+    pageMap.get(page)!.images.push(image.src);
+  });
+
+  // Process console errors
+  consoleErrors.forEach((error) => {
+    const page = error.foundOnPage;
+    if (!pageMap.has(page)) {
+      pageMap.set(page, { links: [], images: [], errors: [] });
+    }
+    pageMap.get(page)!.errors.push(error.message);
+  });
+
+  // Build CSV
+  const headers = ["Page Link", "404 Links", "404 Images", "Console Errors"];
+  const rows: string[][] = [];
+
+  pageMap.forEach((issues, page) => {
+    rows.push([
+      page,
+      issues.links.join(" || "),
+      issues.images.join(" || "),
+      issues.errors.join(" || "),
+    ]);
+  });
+
+  const csvContent = [
+    headers.map(escapeCSV).join(","),
+    ...rows.map((row) => row.map(escapeCSV).join(",")),
+  ].join("\n");
+
+  return csvContent;
+}
+
+// Download CSV file
+function downloadCSV(content: string, filename: string): void {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  link.style.visibility = "hidden";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+type TabType =
+  | "logs"
+  | "broken-links"
+  | "broken-images"
+  | "console-errors"
+  | "nav-issues";
 
 interface ContentPanelProps {
   logs: string[];
@@ -41,7 +137,7 @@ export function ContentPanel({
 
   const handleScroll = useCallback(() => {
     onScroll();
-    
+
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
       // Show button if scrolled more than 100px from bottom
@@ -60,7 +156,12 @@ export function ContentPanel({
     }
   }, [containerRef]);
 
-  const tabs: { id: TabType; label: string; count?: number; icon: React.ReactNode }[] = [
+  const tabs: {
+    id: TabType;
+    label: string;
+    count?: number;
+    icon: React.ReactNode;
+  }[] = [
     {
       id: "logs",
       label: "Activity Log",
@@ -80,7 +181,7 @@ export function ContentPanel({
         </svg>
       ),
     },
-    
+
     {
       id: "broken-links",
       label: "Broken Links",
@@ -161,7 +262,6 @@ export function ContentPanel({
         </svg>
       ),
     },
-    
   ];
 
   return (
@@ -188,8 +288,8 @@ export function ContentPanel({
                   ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
                   : "bg-indigo-50 text-indigo-600 border border-indigo-200"
                 : isDark
-                ? "text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-700/50"
-                : "text-slate-500 hover:text-slate-700 border border-transparent hover:bg-slate-100"
+                  ? "text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-700/50"
+                  : "text-slate-500 hover:text-slate-700 border border-transparent hover:bg-slate-100"
             }`}
           >
             {tab.icon}
@@ -202,16 +302,16 @@ export function ContentPanel({
                       ? "bg-red-500/20 text-red-400"
                       : "bg-red-100 text-red-600"
                     : tab.id === "broken-images"
-                    ? isDark
-                      ? "bg-orange-500/20 text-orange-400"
-                      : "bg-orange-100 text-orange-600"
-                    : tab.id === "nav-issues"
-                    ? isDark
-                      ? "bg-amber-500/20 text-amber-400"
-                      : "bg-amber-100 text-amber-600"
-                    : isDark
-                    ? "bg-violet-500/20 text-violet-400"
-                    : "bg-violet-100 text-violet-600"
+                      ? isDark
+                        ? "bg-orange-500/20 text-orange-400"
+                        : "bg-orange-100 text-orange-600"
+                      : tab.id === "nav-issues"
+                        ? isDark
+                          ? "bg-amber-500/20 text-amber-400"
+                          : "bg-amber-100 text-amber-600"
+                        : isDark
+                          ? "bg-violet-500/20 text-violet-400"
+                          : "bg-violet-100 text-violet-600"
                 }`}
               >
                 {tab.count}
@@ -220,25 +320,65 @@ export function ContentPanel({
           </button>
         ))}
 
-        {isCrawling && (
-          <div
-            className={`ml-auto flex items-center gap-2 px-3 py-1.5 rounded-full shrink-0 ${
-              isDark ? "bg-indigo-500/10" : "bg-indigo-50"
-            }`}
-          >
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-            </span>
-            <span
-              className={`text-xs font-medium ${
-                isDark ? "text-indigo-400" : "text-indigo-600"
+        {/* Right side: Live indicator and Export button */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          {isCrawling && (
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${
+                isDark ? "bg-indigo-500/10" : "bg-indigo-50"
               }`}
             >
-              Live
-            </span>
-          </div>
-        )}
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+              </span>
+              <span
+                className={`text-xs font-medium ${
+                  isDark ? "text-indigo-400" : "text-indigo-600"
+                }`}
+              >
+                Live
+              </span>
+            </div>
+          )}
+
+          {/* Export CSV Button */}
+          {(brokenLinks.length > 0 ||
+            brokenImages.length > 0 ||
+            consoleErrors.length > 0) && (
+            <button
+              onClick={() => {
+                const csvContent = generateCSV(
+                  brokenLinks,
+                  brokenImages,
+                  consoleErrors,
+                );
+                const timestamp = new Date().toISOString().split("T")[0];
+                downloadCSV(csvContent, `crawler-issues-${timestamp}.csv`);
+              }}
+              className={`cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                isDark
+                  ? "bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30"
+                  : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200"
+              }`}
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                />
+              </svg>
+              <span>Export CSV</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content Area */}
@@ -284,7 +424,10 @@ export function ContentPanel({
         )}
 
         {activeTab === "nav-issues" && (
-          <NavigationIssuesPanel navigationIssues={navigationIssues} isDark={isDark} />
+          <NavigationIssuesPanel
+            navigationIssues={navigationIssues}
+            isDark={isDark}
+          />
         )}
       </div>
 
