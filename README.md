@@ -52,19 +52,22 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 ### 📊 Real-time Dashboard
 - **Tabbed Interface**: Activity Log, Broken Links, Broken Images, Console Errors, Nav Issues
 - **Live Statistics**: Track pages crawled, broken links, broken images, errors, and warnings
+- **Crawl Timer**: Real-time elapsed seconds counter during crawling, with completion time displayed after
 - **Expandable Details**: Click on any item to see full details
 - **Copy URLs**: One-click copy for broken URLs
 - **Clickable Source Pages**: Jump directly to the page containing the issue
 
 ### 🎨 User Experience
 - **Light/Dark Theme**: Toggle between themes with smooth transitions
+- **React Icons**: All UI icons use react-icons (Heroicons 2) instead of emojis for a clean, consistent look
 - **Scroll to Bottom Button**: Appears when scrolled up in the activity log
 - **Auto-scroll**: Logs auto-scroll when at bottom, pause when reviewing
-- **Live Indicator**: Pulsing indicator shows when crawling is active
+- **Live Indicator**: Pulsing indicator shows when crawling is active, with elapsed time
 - **Responsive Design**: Works on desktop and tablet screens
 - **Form Submission**: Press Enter in URL fields to start crawling
 
 ### ⚙️ Smart Crawling
+- **Parallel Workers**: Configurable 1–20 concurrent browser pages for faster crawling
 - **Sitemap Support**: Import URLs from sitemap.xml with sitemap index support
 - **CSS Selector Scoping**: Only check links & images within a specific selector (e.g., `.main-content`)
 - **No Page Limit**: Crawl your entire site without artificial limits
@@ -86,17 +89,17 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 
 ### Link Preview Mode
 Before crawling, discover and select which pages to check:
-- 🔍 Real-time link discovery with progress
-- ✓ Select/deselect individual links or ranges
-- 📊 Shows total links, sitemap links, and pages scanned
+- Real-time link discovery with progress
+- Select/deselect individual links or ranges
+- Shows total links, sitemap links, and pages scanned
 
 ### Activity Log
-Real-time crawling progress with live updates:
-- 🔍 Currently crawling URL with spinner
-- ✅ Successful operations
-- ❌ Errors and broken resources
-- 🌐 External link checking progress
-- 📊 Queue and batch status
+Real-time crawling progress with live updates and elapsed timer:
+- Currently crawling URL with spinner and worker ID
+- Successful operations
+- Errors and broken resources
+- External link checking progress
+- Queue and worker status
 
 ### Broken Links Panel
 Categorized by status code with filterable tabs:
@@ -178,23 +181,29 @@ pnpm start
      - `article, .post-content` — Multiple selectors supported
    - Great for ignoring navigation, footer, and sidebar links
 
-4. **Click "Start Crawl" or press Enter**
+4. **Set Parallel Workers** (optional, default 3)
+   - Drag the slider to choose 1–20 concurrent browser pages
+   - Higher values crawl faster but use more RAM
+   - See the [Parallel Workers Guide](#parallel-workers-guide) for recommendations
+
+5. **Click "Start Crawl" or press Enter**
    - PageMedic discovers all links first
    - Watch real-time discovery progress
 
-5. **Select Pages to Crawl**
+6. **Select Pages to Crawl**
    - Review discovered links in the preview
    - Use checkboxes or Shift+Click to select ranges
    - Click "Start Crawl" to begin
 
-6. **Review Issues**
+7. **Review Issues**
    - Switch between tabs: Activity Log, Broken Links, Broken Images, Console Errors, Nav Issues
    - **Broken Links Tab**: Use sub-tabs to filter by status code (404, 401, 403, 5xx)
+   - The elapsed time counter shows how long the crawl has been running
    - Click on any card to expand details
    - "FIX HERE" label shows which page to edit
    - Click source page link to visit it directly
 
-7. **Stop Anytime**
+8. **Stop Anytime**
    - Click "Stop" to halt crawling gracefully
 
 ### Understanding the Results
@@ -228,26 +237,28 @@ JavaScript and console errors:
 
 ### Log Message Reference
 
-| Emoji | Meaning |
-|-------|---------|
-| 🚀 | PageMedic starting |
-| 🎯 | CSS selector active |
-| 📄 | Loading sitemap |
-| ✅ | Success/completion |
-| 🔍 | Currently crawling |
-| 🔗 | Link information |
-| ↳ | Internal link status details |
-| 🔎 | Validating links |
-| 🌐 | External link checking |
-| 🖼️ | Image information |
-| 🔗❌ | Broken link detected |
-| 🖼️❌ | Broken image detected |
-| 🚫 | Request failed |
-| ❌ | Console error |
-| 🔥 | JavaScript error |
-| ⚠️ | Warning/navigation issue |
-| 📋 | Queue status |
-| 🏁 | Crawl complete |
+Log messages use react-icons (Heroicons 2) in the UI. The table below shows the icon meaning:
+
+| Icon | Meaning |
+|------|---------|
+| RocketLaunch | PageMedic starting |
+| CursorArrowRays | CSS selector active |
+| DocumentText | Loading sitemap |
+| CheckCircle | Success/completion |
+| MagnifyingGlass | Currently crawling |
+| Link | Link information |
+| ArrowUturnRight | Internal link status details |
+| MagnifyingGlassPlus | Validating links |
+| GlobeAlt | External link checking |
+| Photo | Image information |
+| Link + XCircle | Broken link detected |
+| Photo + XCircle | Broken image detected |
+| NoSymbol | Request failed |
+| XCircle | Console error |
+| Fire | JavaScript error |
+| ExclamationTriangle | Warning/navigation issue |
+| ClipboardDocumentList | Queue status |
+| Flag | Crawl complete |
 
 ## Architecture
 
@@ -269,10 +280,10 @@ JavaScript and console errors:
 ### Data Flow
 1. User submits start URL → Discovery API streams found links
 2. User selects links → Crawl API receives selection via POST
-3. Playwright launches headless Chromium
-4. Each page visited → Extract links, check internal & external
+3. Playwright launches headless Chromium with N worker pages
+4. Workers pull from a shared queue → Extract links, check internal & external
 5. Broken resources → Look up referrer, send to client
-6. Client receives events → Updates UI in real-time
+6. Client receives events → Updates UI in real-time with elapsed timer
 
 ## Configuration
 
@@ -283,6 +294,7 @@ JavaScript and console errors:
 | Start URL | Yes | The URL to begin crawling from |
 | Sitemap URL | No | Path to sitemap.xml for comprehensive discovery |
 | CSS Selector | No | Scope link/image checking to specific elements |
+| Parallel Workers | No | Number of concurrent browser pages (1–20, default 3) |
 
 ### CSS Selector Examples
 
@@ -299,6 +311,16 @@ JavaScript and console errors:
 In `app/api/crawl/route.ts`:
 - `BATCH_SIZE`: URLs per batch (default: 100)
 - `timeout`: Navigation timeout (default: 30000ms)
+
+### Parallel Workers Guide
+
+| VPS RAM | Recommended Workers | Notes |
+|---------|-------------------|-------|
+| 2 GB | 1–3 | Minimal headroom, use conservatively |
+| 4 GB | 3–10 | Good for most sites |
+| 8 GB | 10–20 | Fast crawling for large sites |
+
+Each worker opens a Chromium tab (~50–150 MB RAM). The slider in the UI lets you pick 1–20 workers.
 
 ### Skip Lists
 
@@ -349,12 +371,14 @@ app/
 │   └── ...
 ├── hooks/
 │   ├── useCrawler.ts         # Crawler state management
+│   ├── useCrawlTimer.ts      # Elapsed time tracking
 │   ├── useStats.ts           # Statistics calculation
 │   ├── useTheme.ts           # Theme management
 │   └── useAutoScroll.ts      # Scroll behavior
 ├── types/
 │   └── crawler.ts            # TypeScript interfaces
 ├── utils/
+│   ├── emojiIcons.tsx         # Emoji-to-react-icon mapping
 │   ├── logParser.ts          # Log message parsing
 │   └── logStyles.ts          # Log styling utilities
 ├── page.tsx                  # Main PageMedic component
@@ -371,12 +395,14 @@ app/
 
 ## Future Enhancements
 
-- [ ] Export results to CSV/JSON
+- [x] Export results to CSV
+- [x] Parallel browser workers (1–20 concurrent pages)
+- [x] Crawl timer with elapsed seconds
+- [x] React Icons replacing emojis
 - [ ] Crawl depth limiting
 - [ ] Authentication support (login flows)
 - [ ] Screenshot capture on errors
 - [ ] Performance metrics (Core Web Vitals)
-- [ ] Parallel browser instances
 - [ ] Pause/resume functionality
 - [ ] Historical crawl comparison
 - [ ] Custom ignore patterns

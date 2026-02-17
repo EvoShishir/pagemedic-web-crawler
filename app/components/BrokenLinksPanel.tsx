@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { BrokenLink } from "../types/crawler";
+import { HiOutlineMapPin } from "react-icons/hi2";
 
 interface BrokenLinksPanelProps {
   brokenLinks: BrokenLink[];
@@ -423,7 +424,7 @@ export function BrokenLinksPanel({ brokenLinks, isDark }: BrokenLinksPanelProps)
                       isDark ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600"
                     }`}
                   >
-                    📍 Source
+                    <HiOutlineMapPin className="inline w-3 h-3 mr-0.5" /> Source
                   </span>
                   <span
                     className={`text-xs truncate ${

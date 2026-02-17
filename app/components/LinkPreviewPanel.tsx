@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { HiOutlineLink } from "react-icons/hi2";
 
 interface LinkPreviewPanelProps {
   links: string[];
@@ -218,7 +219,7 @@ export function LinkPreviewPanel({
               >
                 {isShiftHeld && anchorIndex !== null ? (
                   <span className={isDark ? "text-amber-400" : "text-amber-600"}>
-                    Click to {anchorAction} range from anchor (⚓)
+                    Click to {anchorAction} range from anchor (<HiOutlineLink className="inline w-3.5 h-3.5" />)
                   </span>
                 ) : (
                   "Click to toggle • Hold Shift to select range"
@@ -477,7 +478,7 @@ export function LinkPreviewPanel({
                         : "text-slate-400"
                     }`}
                   >
-                    {isAnchor && isShiftHeld ? "⚓" : `#${linkNumber}`}
+                    {isAnchor && isShiftHeld ? <HiOutlineLink className="inline w-3.5 h-3.5" /> : `#${linkNumber}`}
                   </span>
 
                   {/* Link path */}

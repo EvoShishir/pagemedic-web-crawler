@@ -405,7 +405,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { startUrl, sitemapUrl, cssSelector, selectedUrls: selectedUrlsArray, allDiscoveredUrls: allDiscoveredArray } = body;
+    const { startUrl, sitemapUrl, cssSelector, concurrency: concurrencyParam, selectedUrls: selectedUrlsArray, allDiscoveredUrls: allDiscoveredArray } = body;
 
     if (!startUrl) {
       return new Response("Missing startUrl parameter", { status: 400 });
@@ -423,9 +423,11 @@ export async function POST(request: NextRequest) {
       allDiscoveredUrls = new Set(allDiscoveredArray.map((url: string) => cleanUrl(url)));
     }
 
-    return handleCrawl(startUrl, sitemapUrl || null, selectedUrls, allDiscoveredUrls, cssSelector || undefined);
-  } catch (err: any) {
-    return new Response(`Invalid request body: ${err.message}`, { status: 400 });
+    const concurrency = Math.min(Math.max(parseInt(concurrencyParam) || 3, 1), 20);
+    return handleCrawl(startUrl, sitemapUrl || null, selectedUrls, allDiscoveredUrls, cssSelector || undefined, concurrency);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : "Unknown error";
+    return new Response(`Invalid request body: ${errMsg}`, { status: 400 });
   }
 }
 
@@ -434,7 +436,8 @@ function handleCrawl(
   sitemapUrl: string | null,
   selectedUrls: Set<string> | null,
   allDiscoveredUrls: Set<string> | null = null,
-  cssSelector?: string
+  cssSelector?: string,
+  concurrency: number = 3
 ) {
 
   const { stream, sendEvent, close } = createSSEResponse();
@@ -444,59 +447,52 @@ function handleCrawl(
     let browser;
 
     try {
-      sendEvent({ type: "log", message: "🚀 Starting crawler..." });
+      sendEvent({ type: "log", message: `🚀 Starting crawler... (${concurrency} parallel worker${concurrency > 1 ? "s" : ""})` });
       if (cssSelector) {
         sendEvent({ type: "log", message: `🎯 CSS selector active: ${cssSelector}` });
       }
 
       browser = await chromium.launch({ headless: true });
       const context = await browser.newContext({
-        ignoreHTTPSErrors: true, // Allow self-signed certificates
+        ignoreHTTPSErrors: true,
       });
-      const page = await context.newPage();
+
+      // Create worker pages
+      const pages: Page[] = [];
+      for (let i = 0; i < concurrency; i++) {
+        pages.push(await context.newPage());
+      }
 
       const visited = new Set<string>();
       const checkedResources = new Set<string>();
       
-      // If selectedUrls is provided, use those; otherwise start with startUrl
       const queue: string[] = selectedUrls ? [...selectedUrls] : [startUrl];
       const origin = new URL(startUrl).origin;
       
-      // Flag to indicate if we're in selective mode (user pre-selected URLs)
       const isSelectiveMode = selectedUrls !== null;
-
-      // Track where each URL was discovered (referrer tracking)
-      // Map: URL -> array of references (pages that link to this URL)
       const linkRegistry = new Map<string, LinkReference[]>();
 
       let totalCrawled = 0;
       let brokenLinksCount = 0;
       let brokenImagesCount = 0;
       let navigationIssuesCount = 0;
-      const BATCH_SIZE = 100;
 
-      // Track current page URL for context
-      let currentPageUrl = startUrl;
+      // Track which URL each page is currently processing
+      const pageCurrentUrl = new Map<Page, string>();
       
-      // Track if this is the first page (for header link handling)
       let isFirstPage = true;
-      
-      // Flag to check if sitemap was provided (affects header link behavior)
       const hasSitemap = !!sitemapUrl;
 
-      // Helper to register a link reference
       const registerLink = (url: string, ref: LinkReference) => {
         if (!linkRegistry.has(url)) {
           linkRegistry.set(url, []);
         }
         const refs = linkRegistry.get(url)!;
-        // Avoid duplicate references from same page
         if (!refs.some(r => r.foundOnPage === ref.foundOnPage && r.linkText === ref.linkText)) {
           refs.push(ref);
         }
       };
 
-      // Helper to get link references for a URL
       const getLinkReferences = (url: string): LinkReference[] => {
         return linkRegistry.get(url) || [];
       };
@@ -511,11 +507,9 @@ function handleCrawl(
           );
 
           sitemapUrls.forEach((u) => {
-            // Only queue HTML pages, not resources
             if (!isNonHtmlResource(u)) {
               queue.push(u);
             }
-            // Register sitemap as the source
             registerLink(u, {
               foundOnPage: sitemapUrl,
               linkText: "[From sitemap]",
@@ -527,823 +521,514 @@ function handleCrawl(
             type: "log",
             message: `✅ Added ${sitemapUrls.length} URLs from sitemap`,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : "Unknown error";
           sendEvent({
             type: "log",
-            message: `⚠️ Failed to load sitemap: ${err.message}`,
+            message: `⚠️ Failed to load sitemap: ${errMsg}`,
           });
         }
       }
 
-      // Register start URL
       registerLink(startUrl, {
         foundOnPage: "[Start URL]",
         linkText: "[User provided]",
         elementContext: "<input>",
       });
 
-      // Listen for failed network requests (catches 404s, 500s, etc.)
-      // Only for sub-resources, not main document navigations
-      page.on("response", (response: PlaywrightResponse) => {
-        const url = response.url();
-        const status = response.status();
-        const request = response.request();
-        const resourceType = request.resourceType();
+      // Set up event listeners for each worker page
+      function setupPageListeners(workerPage: Page) {
+        workerPage.on("response", (response: PlaywrightResponse) => {
+          const url = response.url();
+          const status = response.status();
+          const request = response.request();
+          const resourceType = request.resourceType();
+          const currentUrl = pageCurrentUrl.get(workerPage) || startUrl;
 
-        // Only track internal resources with error status codes
-        if (!url.startsWith(origin)) return;
-        if (status < 400) return;
-        if (checkedResources.has(url)) return;
-        
-        // Skip main document navigations - handled in main loop with proper referrer tracking
-        if (resourceType === "document") {
-          return;
-        }
-        
-        // Skip non-essential resource types (CSS, fonts, etc.)
-        if (["stylesheet", "font", "script", "media"].includes(resourceType)) {
-          return;
-        }
-        
-        // Skip SVG images - they can report false errors
-        if (url.toLowerCase().includes(".svg")) {
-          return;
-        }
-        
-        checkedResources.add(url);
+          if (!url.startsWith(origin)) return;
+          if (status < 400) return;
+          if (checkedResources.has(url)) return;
+          if (resourceType === "document") return;
+          if (["stylesheet", "font", "script", "media"].includes(resourceType)) return;
+          if (url.toLowerCase().includes(".svg")) return;
+          
+          checkedResources.add(url);
 
-        const contentType = response.headers()["content-type"] || "";
-        const type = getResourceType(url, contentType);
+          const contentType = response.headers()["content-type"] || "";
+          const type = getResourceType(url, contentType);
+          if (type === "document") return;
 
-        // Skip documents like PDFs - they're handled separately
-        if (type === "document") {
-          return;
-        }
-
-        // Only report images with genuine 404/500 errors
-        if ((type === "image" || resourceType === "image") && status >= 400) {
-          brokenImagesCount++;
-          const brokenImage: BrokenImage = {
-            src: url,
-            foundOnPage: currentPageUrl,
-            altText: "[Detected from network]",
-            elementContext: `<${resourceType}>`,
-            reason: `HTTP ${status} - Resource not found`,
-            timestamp: new Date().toISOString(),
-          };
-          sendEvent({
-            type: "broken_image",
-            message: `🖼️❌ Broken image (${status}): ${url}`,
-            data: brokenImage,
-          });
-        } else if (type === "link" || resourceType === "fetch" || resourceType === "xhr") {
-          // For fetch/xhr requests, use the link registry if available
-          const references = getLinkReferences(url);
-          if (references.length > 0) {
-            for (const ref of references) {
-              brokenLinksCount++;
-              const brokenLink: BrokenLink = {
-                url: url,
-                statusCode: status,
-                foundOnPage: ref.foundOnPage,
-                linkText: ref.linkText,
-                elementContext: ref.elementContext,
-                timestamp: new Date().toISOString(),
-              };
-              sendEvent({
-                type: "broken_link",
-                message: `🔗❌ Broken resource (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
-                data: brokenLink,
-              });
-            }
-          } else {
-            brokenLinksCount++;
-            const brokenLink: BrokenLink = {
-              url: url,
-              statusCode: status,
-              foundOnPage: currentPageUrl,
-              linkText: "[Detected from network]",
+          if ((type === "image" || resourceType === "image") && status >= 400) {
+            brokenImagesCount++;
+            const brokenImage: BrokenImage = {
+              src: url,
+              foundOnPage: currentUrl,
+              altText: "[Detected from network]",
               elementContext: `<${resourceType}>`,
+              reason: `HTTP ${status} - Resource not found`,
               timestamp: new Date().toISOString(),
             };
             sendEvent({
-              type: "broken_link",
-              message: `🔗❌ Broken resource (${status}): ${url}`,
-              data: brokenLink,
+              type: "broken_image",
+              message: `🖼️❌ Broken image (${status}): ${url}`,
+              data: brokenImage,
+            });
+          } else if (type === "link" || resourceType === "fetch" || resourceType === "xhr") {
+            const references = getLinkReferences(url);
+            if (references.length > 0) {
+              for (const ref of references) {
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `🔗❌ Broken resource (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
+                  data: { url, statusCode: status, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              }
+            } else {
+              brokenLinksCount++;
+              sendEvent({
+                type: "broken_link",
+                message: `🔗❌ Broken resource (${status}): ${url}`,
+                data: { url, statusCode: status, foundOnPage: currentUrl, linkText: "[Detected from network]", elementContext: `<${resourceType}>`, timestamp: new Date().toISOString() } as BrokenLink,
+              });
+            }
+          }
+        });
+
+        workerPage.on("requestfailed", (request: Request) => {
+          const url = request.url();
+          const currentUrl = pageCurrentUrl.get(workerPage) || startUrl;
+          if (!url.startsWith(origin)) return;
+          if (checkedResources.has(url)) return;
+
+          const failure = request.failure();
+          const errorText = failure?.errorText || "";
+          const resourceType = request.resourceType();
+
+          if (shouldIgnoreError(errorText) || 
+              errorText.includes("ERR_ABORTED") || errorText.includes("ERR_BLOCKED") ||
+              errorText.includes("ERR_FAILED") || errorText.includes("ERR_CACHE") ||
+              errorText.includes("ERR_CONNECTION")) return;
+          if (resourceType === "document") return;
+          if (["stylesheet", "font", "script", "media"].includes(resourceType)) return;
+          if (url.toLowerCase().includes(".svg")) return;
+
+          checkedResources.add(url);
+
+          sendEvent({ type: "log", message: `🚫 Request failed: ${url} | Reason: ${errorText} | Page: ${currentUrl}` });
+
+          if (resourceType === "image" && errorText.includes("ERR_NAME_NOT_RESOLVED")) {
+            brokenImagesCount++;
+            sendEvent({
+              type: "broken_image",
+              message: `🖼️❌ Broken image: ${url}`,
+              data: { src: url, foundOnPage: currentUrl, altText: "[Detected from network]", elementContext: `<${resourceType}>`, reason: errorText || "Request failed", timestamp: new Date().toISOString() } as BrokenImage,
             });
           }
-        }
-      });
+        });
 
-      // Set up request failed listener - only for critical failures
-      page.on("requestfailed", (request: Request) => {
-        const url = request.url();
-        if (!url.startsWith(origin)) return;
-        if (checkedResources.has(url)) return;
+        workerPage.on("console", (msg) => {
+          if (msg.type() === "error") {
+            const text = msg.text();
+            const currentUrl = pageCurrentUrl.get(workerPage) || startUrl;
+            if (shouldIgnoreError(text)) return;
+            
+            sendEvent({ type: "log", message: `❌ Console error: ${text} | Page: ${currentUrl}` });
+            sendEvent({
+              type: "console_error",
+              message: `❌ Console error: ${text}`,
+              data: { message: text, foundOnPage: currentUrl, type: "error", timestamp: new Date().toISOString() } as ConsoleError,
+            });
 
-        const failure = request.failure();
-        const errorText = failure?.errorText || "";
-        const resourceType = request.resourceType();
+            const parsed = parse404FromConsoleError(text);
+            if (parsed && parsed.url.startsWith(origin) && !checkedResources.has(parsed.url)) {
+              if (isNonHtmlResource(parsed.url) || parsed.url.toLowerCase().includes(".svg")) return;
+              checkedResources.add(parsed.url);
+              
+              const type = getResourceType(parsed.url);
+              if (type === "image" && parsed.status === 404) {
+                brokenImagesCount++;
+                sendEvent({
+                  type: "broken_image",
+                  message: `🖼️❌ Broken image (${parsed.status}): ${parsed.url.slice(0, 80)}...`,
+                  data: { src: parsed.url, foundOnPage: currentUrl, altText: "[Detected from console]", elementContext: "<console-error>", reason: `HTTP ${parsed.status} - From console error`, timestamp: new Date().toISOString() } as BrokenImage,
+                });
+              } else if (type === "link") {
+                const references = getLinkReferences(parsed.url);
+                if (references.length > 0) {
+                  for (const ref of references) {
+                    brokenLinksCount++;
+                    sendEvent({
+                      type: "broken_link",
+                      message: `🔗❌ Broken resource (${parsed.status}): ${parsed.url} | Linked from: ${ref.foundOnPage}`,
+                      data: { url: parsed.url, statusCode: parsed.status, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as BrokenLink,
+                    });
+                  }
+                } else {
+                  brokenLinksCount++;
+                  sendEvent({
+                    type: "broken_link",
+                    message: `🔗❌ Broken resource (${parsed.status}): ${parsed.url}`,
+                    data: { url: parsed.url, statusCode: parsed.status, foundOnPage: currentUrl, linkText: "[Detected from console]", elementContext: "<console-error>", timestamp: new Date().toISOString() } as BrokenLink,
+                  });
+                }
+              }
+            }
+          }
+        });
 
-        // Ignore aborted, blocked, and other non-critical errors
-        if (shouldIgnoreError(errorText) || 
-            errorText.includes("ERR_ABORTED") || 
-            errorText.includes("ERR_BLOCKED") ||
-            errorText.includes("ERR_FAILED") ||
-            errorText.includes("ERR_CACHE") ||
-            errorText.includes("ERR_CONNECTION")) {
+        workerPage.on("pageerror", (err) => {
+          const currentUrl = pageCurrentUrl.get(workerPage) || startUrl;
+          sendEvent({ type: "log", message: `🔥 JS error: ${err.message} | Page: ${currentUrl}` });
+          sendEvent({
+            type: "console_error",
+            message: `🔥 JS error: ${err.message}`,
+            data: { message: err.message, foundOnPage: currentUrl, type: "js_error", timestamp: new Date().toISOString() } as ConsoleError,
+          });
+        });
+      }
+
+      // Set up listeners on all worker pages
+      for (const workerPage of pages) {
+        setupPageListeners(workerPage);
+      }
+
+      // Worker function: process a single URL
+      async function processUrl(workerPage: Page, url: string, workerId: number) {
+        // Skip non-HTML resources
+        if (isNonHtmlResource(url)) {
+          const references = getLinkReferences(url);
+          if (references.length > 0 && !checkedResources.has(url)) {
+            const { status, ok } = await checkUrlStatus(url);
+            checkedResources.add(url);
+            if (!ok && status >= 400) {
+              for (const ref of references) {
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `🔗❌ Broken resource (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
+                  data: { url, statusCode: status, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              }
+            }
+          }
           return;
         }
-        
-        // Skip main document navigations - handled in main loop
-        if (resourceType === "document") {
-          return;
-        }
-        
-        // Skip non-essential resource types
-        if (["stylesheet", "font", "script", "media"].includes(resourceType)) {
-          return;
-        }
 
-        // Skip SVG images - they often fail to load but are valid
-        if (url.toLowerCase().includes(".svg")) {
-          return;
-        }
-
-        checkedResources.add(url);
+        totalCrawled++;
+        pageCurrentUrl.set(workerPage, url);
+        const wTag = concurrency > 1 ? `[W${workerId}] ` : "";
 
         sendEvent({
           type: "log",
-          message: `🚫 Request failed: ${url} | Reason: ${errorText} | Page: ${currentPageUrl}`,
+          message: `\n${wTag}🔍 Crawling (${totalCrawled}): ${url}`,
         });
 
-        // Add to broken resources based on type - but only for confirmed errors
-        if (resourceType === "image" && errorText.includes("ERR_NAME_NOT_RESOLVED")) {
-          brokenImagesCount++;
-          const brokenImage: BrokenImage = {
-            src: url,
-            foundOnPage: currentPageUrl,
-            altText: "[Detected from network]",
-            elementContext: `<${resourceType}>`,
-            reason: errorText || "Request failed",
-            timestamp: new Date().toISOString(),
-          };
-          sendEvent({
-            type: "broken_image",
-            message: `🖼️❌ Broken image: ${url}`,
-            data: brokenImage,
+        try {
+          const response = await workerPage.goto(url, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
           });
-        }
-      });
+          
+          await workerPage.waitForTimeout(2000);
 
-      // Listen for console errors to catch 404s - but filter noise
-      page.on("console", (msg) => {
-        if (msg.type() === "error") {
-          const text = msg.text();
-          
-          // Skip CORS and other ignorable errors
-          if (shouldIgnoreError(text)) {
-            return;
-          }
-          
-          // Send to activity log
-          sendEvent({
-            type: "log",
-            message: `❌ Console error: ${text} | Page: ${currentPageUrl}`,
-          });
-          
-          // Also send as console_error event for dedicated panel
-          const consoleError: ConsoleError = {
-            message: text,
-            foundOnPage: currentPageUrl,
-            type: "error",
-            timestamp: new Date().toISOString(),
-          };
-          sendEvent({
-            type: "console_error",
-            message: `❌ Console error: ${text}`,
-            data: consoleError,
-          });
+          // Check if the page itself is a 404
+          if (response && response.status() >= 400) {
+            const status = response.status();
+            sendEvent({ type: "log", message: `${wTag}⚠️ Page returned ${status}: ${url}` });
 
-          // Try to parse 404 from console error
-          const parsed = parse404FromConsoleError(text);
-          if (parsed && parsed.url.startsWith(origin) && !checkedResources.has(parsed.url)) {
-            // Skip non-HTML resources - they're handled via HEAD requests
-            if (isNonHtmlResource(parsed.url)) {
-              return;
-            }
-            
-            // Skip SVG images - they can report false errors
-            if (parsed.url.toLowerCase().includes(".svg")) {
-              return;
-            }
-            
-            checkedResources.add(parsed.url);
-            
-            const type = getResourceType(parsed.url);
-            
-            // Only report images with genuine 404 errors (not other status codes)
-            if (type === "image" && parsed.status === 404) {
-              brokenImagesCount++;
-              const brokenImage: BrokenImage = {
-                src: parsed.url,
-                foundOnPage: currentPageUrl,
-                altText: "[Detected from console]",
-                elementContext: "<console-error>",
-                reason: `HTTP ${parsed.status} - From console error`,
-                timestamp: new Date().toISOString(),
-              };
-              sendEvent({
-                type: "broken_image",
-                message: `🖼️❌ Broken image (${parsed.status}): ${parsed.url.slice(0, 80)}...`,
-                data: brokenImage,
-              });
-            } else if (type === "link") {
-              // Use link registry if available for better source tracking
-              const references = getLinkReferences(parsed.url);
+            const references = getLinkReferences(url);
+            if (!checkedResources.has(url)) {
+              checkedResources.add(url);
               if (references.length > 0) {
                 for (const ref of references) {
                   brokenLinksCount++;
-                  const brokenLink: BrokenLink = {
-                    url: parsed.url,
-                    statusCode: parsed.status,
-                    foundOnPage: ref.foundOnPage,
-                    linkText: ref.linkText,
-                    elementContext: ref.elementContext,
-                    timestamp: new Date().toISOString(),
-                  };
                   sendEvent({
                     type: "broken_link",
-                    message: `🔗❌ Broken resource (${parsed.status}): ${parsed.url} | Linked from: ${ref.foundOnPage}`,
-                    data: brokenLink,
+                    message: `🔗❌ Broken page (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
+                    data: { url, statusCode: status, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as BrokenLink,
                   });
                 }
               } else {
                 brokenLinksCount++;
-                const brokenLink: BrokenLink = {
-                  url: parsed.url,
-                  statusCode: parsed.status,
-                  foundOnPage: currentPageUrl,
-                  linkText: "[Detected from console]",
-                  elementContext: "<console-error>",
-                  timestamp: new Date().toISOString(),
-                };
                 sendEvent({
                   type: "broken_link",
-                  message: `🔗❌ Broken resource (${parsed.status}): ${parsed.url}`,
-                  data: brokenLink,
+                  message: `🔗❌ Broken page (${status}): ${url}`,
+                  data: { url, statusCode: status, foundOnPage: "[Unknown source]", linkText: "[Unknown]", elementContext: "<unknown>", timestamp: new Date().toISOString() } as BrokenLink,
                 });
               }
             }
+            return;
           }
-        }
-      });
 
-      page.on("pageerror", (err) => {
-        sendEvent({
-          type: "log",
-          message: `🔥 JS error: ${err.message} | Page: ${currentPageUrl}`,
-        });
-        
-        // Also send as console_error event for dedicated panel
-        const consoleError: ConsoleError = {
-          message: err.message,
-          foundOnPage: currentPageUrl,
-          type: "js_error",
-          timestamp: new Date().toISOString(),
-        };
-        sendEvent({
-          type: "console_error",
-          message: `🔥 JS error: ${err.message}`,
-          data: consoleError,
-        });
-      });
+          // Extract links
+          const links = await extractLinksWithContext(workerPage, cssSelector);
+          const internalLinks = links
+            .filter((l) => l.href.startsWith(origin))
+            .filter((l) => !isHashOnlyOrAnchor(l.href));
 
-      // Crawl loop
-      while (queue.length) {
-        let batchCount = 0;
-
-        while (queue.length && batchCount < BATCH_SIZE) {
-          const url = queue.shift();
-
-          if (!url || visited.has(url)) continue;
-          
-          // Skip non-HTML resources (PDFs, images, etc.)
-          if (isNonHtmlResource(url)) {
-            // Check if the resource exists with a HEAD request
-            const references = getLinkReferences(url);
-            if (references.length > 0 && !checkedResources.has(url)) {
-              const { status, ok } = await checkUrlStatus(url);
-              checkedResources.add(url);
-              
-              if (!ok && status >= 400) {
-                // Resource is broken
-                for (const ref of references) {
-                  brokenLinksCount++;
-                  const brokenLink: BrokenLink = {
-                    url: url,
-                    statusCode: status,
-                    foundOnPage: ref.foundOnPage,
-                    linkText: ref.linkText,
-                    elementContext: ref.elementContext,
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "broken_link",
-                    message: `🔗❌ Broken resource (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
-                    data: brokenLink,
-                  });
-                }
-              } else {
-                sendEvent({
-                  type: "log",
-                  message: `📄 Resource OK: ${url}`,
-                });
-              }
-            }
-            visited.add(url);
-            continue;
-          }
-          
-          visited.add(url);
-          totalCrawled++;
-          batchCount++;
-          currentPageUrl = url;
+          const headerLinks = internalLinks.filter((l) => l.isInHeader);
+          const contentLinks = internalLinks.filter((l) => !l.isInHeader);
+          const allExternalLinks = links.filter((l) => {
+            try {
+              const linkUrl = new URL(l.href);
+              return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && !l.href.startsWith(origin);
+            } catch { return false; }
+          });
 
           sendEvent({
             type: "log",
-            message: `\n🔍 Crawling (${totalCrawled}): ${url}`,
+            message: `${wTag}🔗 Found ${links.length} links (${internalLinks.length} internal: ${contentLinks.length} content, ${headerLinks.length} header/nav | ${allExternalLinks.length} external)`,
           });
 
-          try {
-            const response = await page.goto(url, {
-              waitUntil: "domcontentloaded", // Faster than networkidle, avoids timeout on slow resources
-              timeout: 30000,
-            });
+          // Register and queue internal links
+          const linksToValidate: Array<{ url: string; text: string; context: string }> = [];
+          let skippedHeaderLinks = 0;
+          let skippedAlreadyVisited = 0;
+          let skippedInSitemap = 0;
+          let addedToQueue = 0;
+
+          for (const link of internalLinks) {
+            const cleanedUrl = cleanUrl(link.href);
             
-            // Wait a bit for dynamic content, but don't block on slow resources
-            await page.waitForTimeout(2000);
-
-            // Check if the page itself is a 404
-            if (response && response.status() >= 400) {
-              const status = response.status();
-              sendEvent({
-                type: "log",
-                message: `⚠️ Page returned ${status}: ${url}`,
-              });
-
-              // Get all pages that linked to this broken page
-              const references = getLinkReferences(url);
-              
-              if (!checkedResources.has(url)) {
-                checkedResources.add(url);
-                
-                // Create a broken link entry for EACH page that links to this URL
-                if (references.length > 0) {
-                  for (const ref of references) {
-                    brokenLinksCount++;
-                    const brokenLink: BrokenLink = {
-                      url: url,
-                      statusCode: status,
-                      foundOnPage: ref.foundOnPage,
-                      linkText: ref.linkText,
-                      elementContext: ref.elementContext,
-                      timestamp: new Date().toISOString(),
-                    };
-                    sendEvent({
-                      type: "broken_link",
-                      message: `🔗❌ Broken page (${status}): ${url} | Linked from: ${ref.foundOnPage}`,
-                      data: brokenLink,
-                    });
-                  }
-                } else {
-                  // No reference found (shouldn't happen normally)
-                  brokenLinksCount++;
-                  const brokenLink: BrokenLink = {
-                    url: url,
-                    statusCode: status,
-                    foundOnPage: "[Unknown source]",
-                    linkText: "[Unknown]",
-                    elementContext: "<unknown>",
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "broken_link",
-                    message: `🔗❌ Broken page (${status}): ${url}`,
-                    data: brokenLink,
-                  });
-                }
-              }
-              
-              // Skip extracting links from 404 pages
-              continue;
-            }
-
-            // Extract and check all links on the page (scoped to CSS selector if provided)
-            const links = await extractLinksWithContext(page, cssSelector);
-            const internalLinks = links
-              .filter((l) => l.href.startsWith(origin))
-              .filter((l) => !isHashOnlyOrAnchor(l.href)); // Skip hash-only anchors
-
-            // Count header vs non-header links for logging
-            const headerLinks = internalLinks.filter((l) => l.isInHeader);
-            const contentLinks = internalLinks.filter((l) => !l.isInHeader);
-            
-            // Count external links
-            const allExternalLinks = links.filter((l) => {
-              try {
-                const linkUrl = new URL(l.href);
-                return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && 
-                       !l.href.startsWith(origin);
-              } catch {
-                return false;
-              }
-            });
-
-            sendEvent({
-              type: "log",
-              message: `🔗 Found ${links.length} links (${internalLinks.length} internal: ${contentLinks.length} content, ${headerLinks.length} header/nav | ${allExternalLinks.length} external)`,
-            });
-
-            // Collect links to validate (links that won't be crawled but need checking)
-            const linksToValidate: Array<{ url: string; text: string; context: string }> = [];
-            let skippedHeaderLinks = 0;
-            let skippedAlreadyVisited = 0;
-            let skippedInSitemap = 0;
-            let addedToQueue = 0;
-
-            // Register and queue internal links
-            for (const link of internalLinks) {
-              // Clean URL by removing hash fragments
-              const cleanedUrl = cleanUrl(link.href);
-              
-              // Handle header/nav links specially:
-              // - If sitemap provided: skip header links entirely (don't check, don't queue)
-              // - If no sitemap: only add header links to queue from first page
-              if (link.isInHeader) {
-                if (hasSitemap) {
-                  // Skip header links when sitemap is provided (nav rarely breaks)
-                  skippedHeaderLinks++;
-                  continue;
-                } else if (!isFirstPage) {
-                  // No sitemap, but not first page - skip header links
-                  skippedHeaderLinks++;
-                  continue;
-                }
-                // No sitemap + first page: fall through to add to queue
-              }
-              
-              // Register where this link was found (for broken link tracking)
-              registerLink(cleanedUrl, {
-                foundOnPage: url,
-                linkText: link.text,
-                elementContext: link.context,
-              });
-              
-              // Only add to queue if not in selective mode (user didn't pre-select URLs)
-              // In selective mode, only crawl the URLs the user selected
-              if (!isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl)) {
-                queue.push(cleanedUrl);
-                addedToQueue++;
-              } else if (isSelectiveMode) {
-                // In selective mode, check if we should validate this link
-                if (visited.has(cleanedUrl) || checkedResources.has(cleanedUrl)) {
-                  skippedAlreadyVisited++;
-                } else if (selectedUrls?.has(cleanedUrl)) {
-                  // Will be crawled as part of selection - skip
-                } else if (allDiscoveredUrls?.has(cleanedUrl)) {
-                  // In sitemap, assume it's valid
-                  skippedInSitemap++;
-                } else if (!queue.includes(cleanedUrl)) {
-                  // Not in sitemap, not selected, not visited - validate it
-                  linksToValidate.push({
-                    url: cleanedUrl,
-                    text: link.text,
-                    context: link.context,
-                  });
-                }
-              }
-            }
-
-            // Log what happened to the internal links
-            if (isSelectiveMode) {
-              const parts = [];
-              if (linksToValidate.length > 0) parts.push(`${linksToValidate.length} to validate`);
-              if (skippedInSitemap > 0) parts.push(`${skippedInSitemap} in sitemap (assumed valid)`);
-              if (skippedAlreadyVisited > 0) parts.push(`${skippedAlreadyVisited} already checked`);
-              if (skippedHeaderLinks > 0) parts.push(`${skippedHeaderLinks} header/nav skipped`);
-              if (parts.length > 0) {
-                sendEvent({
-                  type: "log",
-                  message: `   ↳ Internal links: ${parts.join(", ")}`,
-                });
-              }
-            } else if (addedToQueue > 0) {
-              sendEvent({
-                type: "log",
-                message: `   ↳ Added ${addedToQueue} new internal links to crawl queue`,
-              });
+            if (link.isInHeader) {
+              if (hasSitemap) { skippedHeaderLinks++; continue; }
+              else if (!isFirstPage) { skippedHeaderLinks++; continue; }
             }
             
-            // Mark first page as done after processing
-            if (isFirstPage) {
-              isFirstPage = false;
-            }
-
-            // Validate links that won't be crawled (in selective/sitemap mode)
-            if (linksToValidate.length > 0) {
-              const totalToValidate = linksToValidate.length;
-              sendEvent({
-                type: "log",
-                message: `🔎 Validating ${totalToValidate} links not in crawl queue...`,
-              });
-
-              let validatedCount = 0;
-              let brokenCount = 0;
-              let skippedCount = 0;
-
-              for (let i = 0; i < linksToValidate.length; i++) {
-                const link = linksToValidate[i];
-                
-                if (checkedResources.has(link.url)) {
-                  skippedCount++;
-                  continue;
-                }
-                checkedResources.add(link.url);
-                
-                // Show which link is being checked
-                sendEvent({
-                  type: "log",
-                  message: `   ↳ [${i + 1}/${totalToValidate}] Checking: ${link.url}`,
-                });
-
-                const { status, ok } = await checkUrlStatus(link.url);
-                validatedCount++;
-
-                if (!ok && status >= 400) {
-                  brokenCount++;
-                  brokenLinksCount++;
-                  const brokenLink: BrokenLink = {
-                    url: link.url,
-                    statusCode: status,
-                    foundOnPage: url,
-                    linkText: link.text,
-                    elementContext: link.context,
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "broken_link",
-                    message: `   ↳ ❌ [${status}] ${link.url}`,
-                    data: brokenLink,
-                  });
-                } else if (status === 0) {
-                  // Connection failed / timeout - report as navigation issue
-                  navigationIssuesCount++;
-                  const navIssue: NavigationIssue = {
-                    url: link.url,
-                    reason: "Connection failed or timeout",
-                    foundOnPage: url,
-                    linkText: link.text,
-                    elementContext: link.context,
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "navigation_issue",
-                    message: `   ↳ ⚠️ [Timeout] ${link.url}`,
-                    data: navIssue,
-                  });
-                } else {
-                  // Link is OK - show success status
-                  sendEvent({
-                    type: "log",
-                    message: `   ↳ ✓ [${status}] OK`,
-                  });
-                }
-              }
-
-              sendEvent({
-                type: "log",
-                message: `✅ Link validation complete: ${validatedCount} checked, ${brokenCount} broken${skippedCount > 0 ? `, ${skippedCount} skipped (already checked)` : ""}`,
-              });
-            }
-
-            // Check external links for broken links
-            const externalLinks = links
-              .filter((l) => {
-                try {
-                  const linkUrl = new URL(l.href);
-                  // Must be http/https and not same origin
-                  return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && 
-                         !l.href.startsWith(origin);
-                } catch {
-                  return false;
-                }
-              })
-              .filter((l) => !l.isInHeader) // Skip header/nav external links (usually social icons)
-              .filter((l) => !shouldSkipExternalCheck(l.href)); // Skip social media etc.
-
-            if (externalLinks.length > 0) {
-              sendEvent({
-                type: "log",
-                message: `🌐 Checking ${externalLinks.length} external links...`,
-              });
-
-              let externalChecked = 0;
-              let externalBroken = 0;
-
-              for (let i = 0; i < externalLinks.length; i++) {
-                const link = externalLinks[i];
-                
-                // Skip if already checked
-                if (checkedResources.has(link.href)) {
-                  continue;
-                }
-                checkedResources.add(link.href);
-
-                sendEvent({
-                  type: "log",
-                  message: `   ↳ [${i + 1}/${externalLinks.length}] Checking: ${link.href}`,
-                });
-
-                const { status, ok } = await checkUrlStatus(link.href);
-                externalChecked++;
-
-                if (!ok && status >= 400) {
-                  externalBroken++;
-                  brokenLinksCount++;
-                  const brokenLink: BrokenLink = {
-                    url: link.href,
-                    statusCode: status,
-                    foundOnPage: url,
-                    linkText: link.text,
-                    elementContext: link.context,
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "broken_link",
-                    message: `   ↳ ❌ [${status}] ${link.href}`,
-                    data: brokenLink,
-                  });
-                } else if (status === 0) {
-                  // Connection failed / timeout - report as navigation issue for external links
-                  navigationIssuesCount++;
-                  const navIssue: NavigationIssue = {
-                    url: link.href,
-                    reason: "Connection failed or timeout (external)",
-                    foundOnPage: url,
-                    linkText: link.text,
-                    elementContext: link.context,
-                    timestamp: new Date().toISOString(),
-                  };
-                  sendEvent({
-                    type: "navigation_issue",
-                    message: `   ↳ ⚠️ [Timeout] ${link.href}`,
-                    data: navIssue,
-                  });
-                } else {
-                  sendEvent({
-                    type: "log",
-                    message: `   ↳ ✓ [${status}] OK`,
-                  });
-                }
-              }
-
-              sendEvent({
-                type: "log",
-                message: `✅ External links: ${externalChecked} checked, ${externalBroken} broken`,
-              });
-            }
-
-            // Extract and check all images on the page (DOM-based check, scoped to CSS selector if provided)
-            const images = await extractImagesWithContext(page, cssSelector);
-            sendEvent({
-              type: "log",
-              message: `🖼️ Found ${images.length} images`,
-            });
-
-            for (const img of images) {
-              // Skip invalid/empty image sources
-              if (!img.src || checkedResources.has(img.src)) continue;
-              
-              // Skip non-URL sources (anchors, data URIs, blob URIs)
-              if (img.src === "#" || 
-                  img.src.endsWith("#") || 
-                  img.src.startsWith("data:") || 
-                  img.src.startsWith("blob:") ||
-                  img.src === url ||  // Skip self-referencing URLs
-                  !img.src.startsWith("http")) {
-                continue;
-              }
-              
-              // Check if image failed to load based on DOM properties
-              let isBroken = false;
-              let reason = "";
-
-              // Skip SVG images from naturalWidth check - they often report 0 even when valid
-              const isSvg = img.src.toLowerCase().includes(".svg");
-              
-              if (!img.complete) {
-                isBroken = true;
-                reason = "Image failed to load (incomplete)";
-              } else if (img.naturalWidth === 0 && !isSvg) {
-                // Only flag non-SVG images with zero width
-                isBroken = true;
-                reason = "Image has zero width (failed to load)";
-              }
-
-              // For potentially broken images, verify with a HEAD request
-              if (isBroken && img.src.startsWith(origin)) {
-                try {
-                  const headResult = await checkUrlStatus(img.src);
-                  if (headResult.ok || (headResult.status >= 200 && headResult.status < 400)) {
-                    // Image actually exists - skip it
-                    isBroken = false;
-                  }
-                } catch {
-                  // HEAD request failed, image is likely broken
-                }
-              }
-
-              if (isBroken) {
-                checkedResources.add(img.src);
-                brokenImagesCount++;
-                const brokenImage: BrokenImage = {
-                  src: img.src,
-                  foundOnPage: url,
-                  altText: img.alt,
-                  elementContext: img.context,
-                  reason: reason,
-                  timestamp: new Date().toISOString(),
-                };
-
-                sendEvent({
-                  type: "broken_image",
-                  message: `🖼️❌ Broken image: ${img.src}`,
-                  data: brokenImage,
-                });
-              }
-            }
-          } catch (err: any) {
-            sendEvent({
-              type: "log",
-              message: `⚠️ Navigation error: ${err.message} | Page: ${url}`,
-            });
+            registerLink(cleanedUrl, { foundOnPage: url, linkText: link.text, elementContext: link.context });
             
-            // If navigation failed, report as navigation issue (not broken link)
-            const references = getLinkReferences(url);
-            if (references.length > 0 && !checkedResources.has(url)) {
-              checkedResources.add(url);
-              for (const ref of references) {
+            if (!isSelectiveMode && !visited.has(cleanedUrl) && !queue.includes(cleanedUrl)) {
+              queue.push(cleanedUrl);
+              addedToQueue++;
+            } else if (isSelectiveMode) {
+              if (visited.has(cleanedUrl) || checkedResources.has(cleanedUrl)) {
+                skippedAlreadyVisited++;
+              } else if (selectedUrls?.has(cleanedUrl)) {
+                // Will be crawled
+              } else if (allDiscoveredUrls?.has(cleanedUrl)) {
+                skippedInSitemap++;
+              } else if (!queue.includes(cleanedUrl)) {
+                linksToValidate.push({ url: cleanedUrl, text: link.text, context: link.context });
+              }
+            }
+          }
+
+          if (isSelectiveMode) {
+            const parts = [];
+            if (linksToValidate.length > 0) parts.push(`${linksToValidate.length} to validate`);
+            if (skippedInSitemap > 0) parts.push(`${skippedInSitemap} in sitemap (assumed valid)`);
+            if (skippedAlreadyVisited > 0) parts.push(`${skippedAlreadyVisited} already checked`);
+            if (skippedHeaderLinks > 0) parts.push(`${skippedHeaderLinks} header/nav skipped`);
+            if (parts.length > 0) {
+              sendEvent({ type: "log", message: `${wTag}   ↳ Internal links: ${parts.join(", ")}` });
+            }
+          } else if (addedToQueue > 0) {
+            sendEvent({ type: "log", message: `${wTag}   ↳ Added ${addedToQueue} new internal links to crawl queue` });
+          }
+          
+          if (isFirstPage) isFirstPage = false;
+
+          // Validate links that won't be crawled
+          if (linksToValidate.length > 0) {
+            const totalToValidate = linksToValidate.length;
+            sendEvent({ type: "log", message: `${wTag}🔎 Validating ${totalToValidate} links not in crawl queue...` });
+
+            let validatedCount = 0;
+            let brokenCount = 0;
+            let skippedCount = 0;
+
+            for (let i = 0; i < linksToValidate.length; i++) {
+              const link = linksToValidate[i];
+              if (checkedResources.has(link.url)) { skippedCount++; continue; }
+              checkedResources.add(link.url);
+              
+              sendEvent({ type: "log", message: `${wTag}   ↳ [${i + 1}/${totalToValidate}] Checking: ${link.url}` });
+
+              const { status, ok } = await checkUrlStatus(link.url);
+              validatedCount++;
+
+              if (!ok && status >= 400) {
+                brokenCount++;
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [${status}] ${link.url}`,
+                  data: { url: link.url, statusCode: status, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              } else if (status === 0) {
                 navigationIssuesCount++;
-                const navIssue: NavigationIssue = {
-                  url: url,
-                  reason: err.message || "Navigation failed",
-                  foundOnPage: ref.foundOnPage,
-                  linkText: ref.linkText,
-                  elementContext: ref.elementContext,
-                  timestamp: new Date().toISOString(),
-                };
                 sendEvent({
                   type: "navigation_issue",
-                  message: `⚠️ Navigation issue: ${url} | Reason: ${err.message}`,
-                  data: navIssue,
+                  message: `${wTag}   ↳ ⚠️ [Timeout] ${link.url}`,
+                  data: { url: link.url, reason: "Connection failed or timeout", foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as NavigationIssue,
                 });
+              } else {
+                sendEvent({ type: "log", message: `${wTag}   ↳ ✓ [${status}] OK` });
               }
             }
-          }
 
-          // Show pages remaining after each page is crawled
-          if (queue.length > 0) {
             sendEvent({
               type: "log",
-              message: `📋 ${queue.length} pages remaining in queue`,
+              message: `${wTag}✅ Link validation complete: ${validatedCount} checked, ${brokenCount} broken${skippedCount > 0 ? `, ${skippedCount} skipped (already checked)` : ""}`,
             });
           }
-        }
 
-        sendEvent({
-          type: "log",
-          message: `\n✅ Batch finished. Total pages crawled: ${totalCrawled}`,
-        });
+          // Check external links
+          const externalLinks = links
+            .filter((l) => {
+              try {
+                const linkUrl = new URL(l.href);
+                return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && !l.href.startsWith(origin);
+              } catch { return false; }
+            })
+            .filter((l) => !l.isInHeader)
+            .filter((l) => !shouldSkipExternalCheck(l.href));
 
-        if (queue.length) {
-          sendEvent({
-            type: "log",
-            message: `📊 ${queue.length} URLs remaining in queue`,
-          });
+          if (externalLinks.length > 0) {
+            sendEvent({ type: "log", message: `${wTag}🌐 Checking ${externalLinks.length} external links...` });
+            let externalChecked = 0;
+            let externalBroken = 0;
+
+            for (let i = 0; i < externalLinks.length; i++) {
+              const link = externalLinks[i];
+              if (checkedResources.has(link.href)) continue;
+              checkedResources.add(link.href);
+
+              sendEvent({ type: "log", message: `${wTag}   ↳ [${i + 1}/${externalLinks.length}] Checking: ${link.href}` });
+
+              const { status, ok } = await checkUrlStatus(link.href);
+              externalChecked++;
+
+              if (!ok && status >= 400) {
+                externalBroken++;
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [${status}] ${link.href}`,
+                  data: { url: link.href, statusCode: status, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              } else if (status === 0) {
+                navigationIssuesCount++;
+                sendEvent({
+                  type: "navigation_issue",
+                  message: `${wTag}   ↳ ⚠️ [Timeout] ${link.href}`,
+                  data: { url: link.href, reason: "Connection failed or timeout (external)", foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as NavigationIssue,
+                });
+              } else {
+                sendEvent({ type: "log", message: `${wTag}   ↳ ✓ [${status}] OK` });
+              }
+            }
+
+            sendEvent({ type: "log", message: `${wTag}✅ External links: ${externalChecked} checked, ${externalBroken} broken` });
+          }
+
+          // Check images
+          const images = await extractImagesWithContext(workerPage, cssSelector);
+          sendEvent({ type: "log", message: `${wTag}🖼️ Found ${images.length} images` });
+
+          for (const img of images) {
+            if (!img.src || checkedResources.has(img.src)) continue;
+            if (img.src === "#" || img.src.endsWith("#") || img.src.startsWith("data:") || img.src.startsWith("blob:") || img.src === url || !img.src.startsWith("http")) continue;
+            
+            let isBroken = false;
+            let reason = "";
+            const isSvg = img.src.toLowerCase().includes(".svg");
+            
+            if (!img.complete) { isBroken = true; reason = "Image failed to load (incomplete)"; }
+            else if (img.naturalWidth === 0 && !isSvg) { isBroken = true; reason = "Image has zero width (failed to load)"; }
+
+            if (isBroken && img.src.startsWith(origin)) {
+              try {
+                const headResult = await checkUrlStatus(img.src);
+                if (headResult.ok || (headResult.status >= 200 && headResult.status < 400)) isBroken = false;
+              } catch { /* HEAD request failed */ }
+            }
+
+            if (isBroken) {
+              checkedResources.add(img.src);
+              brokenImagesCount++;
+              sendEvent({
+                type: "broken_image",
+                message: `${wTag}🖼️❌ Broken image: ${img.src}`,
+                data: { src: img.src, foundOnPage: url, altText: img.alt, elementContext: img.context, reason, timestamp: new Date().toISOString() } as BrokenImage,
+              });
+            }
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : "Navigation failed";
+          sendEvent({ type: "log", message: `${wTag}⚠️ Navigation error: ${errMsg} | Page: ${url}` });
+          
+          const references = getLinkReferences(url);
+          if (references.length > 0 && !checkedResources.has(url)) {
+            checkedResources.add(url);
+            for (const ref of references) {
+              navigationIssuesCount++;
+              sendEvent({
+                type: "navigation_issue",
+                message: `${wTag}⚠️ Navigation issue: ${url} | Reason: ${errMsg}`,
+                data: { url, reason: errMsg, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as NavigationIssue,
+              });
+            }
+          }
         }
       }
 
+      // Worker loop: keep pulling from queue until empty
+      async function worker(workerPage: Page, workerId: number) {
+        while (true) {
+          const url = queue.shift();
+          if (!url) break;
+          if (visited.has(url)) continue;
+          visited.add(url);
+          await processUrl(workerPage, url, workerId);
+        }
+      }
+
+      // Run workers with re-check: new URLs may be discovered during crawling
+      let hasWork = true;
+      while (hasWork) {
+        if (queue.length === 0) {
+          hasWork = false;
+          break;
+        }
+
+        sendEvent({
+          type: "log",
+          message: `📋 Queue: ${queue.length} URLs | Starting ${Math.min(concurrency, queue.length)} workers...`,
+        });
+
+        await Promise.all(
+          pages.map((p, i) => worker(p, i + 1))
+        );
+
+        // Check if new URLs were added during processing
+        if (queue.length > 0) {
+          sendEvent({
+            type: "log",
+            message: `📊 Workers found ${queue.length} new URLs, continuing...`,
+          });
+        } else {
+          hasWork = false;
+        }
+      }
+
+      // Close all pages
+      for (const p of pages) {
+        await p.close();
+      }
       await browser.close();
+      browser = undefined;
 
       sendEvent({
         type: "done",
         message: `\n🏁 Crawl complete. Pages: ${visited.size} | Broken Links: ${brokenLinksCount} | Broken Images: ${brokenImagesCount} | Nav Issues: ${navigationIssuesCount}`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Unknown error";
       sendEvent({
         type: "error",
-        message: err.message,
+        message: errMsg,
       });
 
       if (browser) {

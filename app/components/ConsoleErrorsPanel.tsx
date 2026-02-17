@@ -1,5 +1,11 @@
 import { useState } from "react";
 import { ConsoleError } from "../types/crawler";
+import {
+  HiOutlineFire,
+  HiOutlineExclamationTriangle,
+  HiOutlineXCircle,
+  HiOutlineMapPin,
+} from "react-icons/hi2";
 
 interface ConsoleErrorsPanelProps {
   consoleErrors: ConsoleError[];
@@ -24,7 +30,7 @@ function getErrorTypeStyles(type: ConsoleError["type"], isDark: boolean) {
   switch (type) {
     case "js_error":
       return {
-        icon: "🔥",
+        icon: <HiOutlineFire className="inline w-3.5 h-3.5" />,
         label: "JS Error",
         bgColor: isDark ? "bg-orange-500/20" : "bg-orange-100",
         textColor: isDark ? "text-orange-400" : "text-orange-600",
@@ -32,7 +38,7 @@ function getErrorTypeStyles(type: ConsoleError["type"], isDark: boolean) {
       };
     case "warning":
       return {
-        icon: "⚠️",
+        icon: <HiOutlineExclamationTriangle className="inline w-3.5 h-3.5" />,
         label: "Warning",
         bgColor: isDark ? "bg-amber-500/20" : "bg-amber-100",
         textColor: isDark ? "text-amber-400" : "text-amber-600",
@@ -41,7 +47,7 @@ function getErrorTypeStyles(type: ConsoleError["type"], isDark: boolean) {
     case "error":
     default:
       return {
-        icon: "❌",
+        icon: <HiOutlineXCircle className="inline w-3.5 h-3.5" />,
         label: "Error",
         bgColor: isDark ? "bg-red-500/20" : "bg-red-100",
         textColor: isDark ? "text-red-400" : "text-red-600",
@@ -214,7 +220,7 @@ export function ConsoleErrorsPanel({ consoleErrors, isDark }: ConsoleErrorsPanel
                           isDark ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600"
                         }`}
                       >
-                        📍 Page
+                        <HiOutlineMapPin className="inline w-3 h-3 mr-0.5" /> Page
                       </span>
                       <span
                         className={`text-xs truncate ${

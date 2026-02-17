@@ -46,6 +46,7 @@ export function useCrawler() {
   const [pendingStartUrl, setPendingStartUrl] = useState<string>("");
   const [pendingSitemapUrl, setPendingSitemapUrl] = useState<string>("");
   const [pendingCssSelector, setPendingCssSelector] = useState<string>("");
+  const [pendingConcurrency, setPendingConcurrency] = useState<number>(3);
   const [pendingResetCallback, setPendingResetCallback] = useState<
     (() => void) | null
   >(null);
@@ -88,6 +89,7 @@ export function useCrawler() {
     setPendingStartUrl("");
     setPendingSitemapUrl("");
     setPendingCssSelector("");
+    setPendingConcurrency(3);
     setPendingResetCallback(null);
   }, [discoveryEventSource]);
 
@@ -97,6 +99,7 @@ export function useCrawler() {
       startUrl: string,
       sitemapUrl: string,
       cssSelector: string,
+      concurrency: number,
       onResetAutoScroll?: () => void
     ) => {
       if (!startUrl) {
@@ -117,6 +120,7 @@ export function useCrawler() {
       setPendingStartUrl(startUrl);
       setPendingSitemapUrl(sitemapUrl);
       setPendingCssSelector(cssSelector);
+      setPendingConcurrency(concurrency);
       setPendingResetCallback(() => onResetAutoScroll || null);
       setDiscoveryProgress({
         message: "Starting discovery...",
@@ -224,6 +228,7 @@ export function useCrawler() {
             startUrl: pendingStartUrl,
             sitemapUrl: pendingSitemapUrl || undefined,
             cssSelector: pendingCssSelector || undefined,
+            concurrency: pendingConcurrency,
             selectedUrls: [...selectedLinks],
             // Pass all discovered URLs so sitemap links can be skipped from validation
             allDiscoveredUrls: discoveredLinks,
@@ -344,6 +349,7 @@ export function useCrawler() {
     pendingStartUrl,
     pendingSitemapUrl,
     pendingCssSelector,
+    pendingConcurrency,
     pendingResetCallback,
     discoveredLinks,
     showAlert,
@@ -357,6 +363,7 @@ export function useCrawler() {
     setPendingStartUrl("");
     setPendingSitemapUrl("");
     setPendingCssSelector("");
+    setPendingConcurrency(3);
     setPendingResetCallback(null);
     setDiscoveryProgress(null);
   }, []);

@@ -10,7 +10,7 @@ interface ConfigCardProps {
   stats: CrawlerStats;
   isCrawling: boolean;
   isDiscovering: boolean;
-  onStartCrawl: (startUrl: string, sitemapUrl: string, cssSelector: string) => void;
+  onStartCrawl: (startUrl: string, sitemapUrl: string, cssSelector: string, concurrency: number) => void;
   onStop: () => void;
 }
 
@@ -26,13 +26,14 @@ export function ConfigCard({
   const [startUrl, setStartUrl] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [cssSelector, setCssSelector] = useState("");
+  const [concurrency, setConcurrency] = useState(3);
 
   const isDisabled = isCrawling || isDiscovering;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isDisabled) {
-    onStartCrawl(startUrl, sitemapUrl, cssSelector);
+    onStartCrawl(startUrl, sitemapUrl, cssSelector, concurrency);
     }
   };
 
@@ -140,6 +141,37 @@ export function ConfigCard({
             >
               Only check links & images within this selector
             </p>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              className={`block text-sm font-medium ${
+                isDark ? "text-zinc-400" : "text-slate-600"
+              }`}
+            >
+              Parallel Workers
+              <span
+                className={`ml-2 font-mono text-xs px-1.5 py-0.5 rounded ${
+                  isDark ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600"
+                }`}
+              >
+                {concurrency}
+              </span>
+            </label>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              value={concurrency}
+              onChange={(e) => setConcurrency(parseInt(e.target.value))}
+              disabled={isDisabled}
+              className="w-full accent-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <div className={`flex justify-between text-xs ${isDark ? "text-zinc-500" : "text-slate-400"}`}>
+              <span>1 (low RAM)</span>
+              <span>10 (balanced)</span>
+              <span>20 (fast)</span>
+            </div>
           </div>
         </div>
 

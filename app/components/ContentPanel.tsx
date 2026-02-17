@@ -118,6 +118,7 @@ interface ContentPanelProps {
   isDark: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
+  elapsedSeconds?: number;
 }
 
 export function ContentPanel({
@@ -131,6 +132,7 @@ export function ContentPanel({
   isDark,
   containerRef,
   onScroll,
+  elapsedSeconds = 0,
 }: ContentPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>("logs");
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -338,6 +340,28 @@ export function ContentPanel({
                 }`}
               >
                 Live
+              </span>
+              <span
+                className={`text-xs font-mono tabular-nums ${
+                  isDark ? "text-indigo-400/70" : "text-indigo-500/70"
+                }`}
+              >
+                {elapsedSeconds}s
+              </span>
+            </div>
+          )}
+          {!isCrawling && elapsedSeconds > 0 && (
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${
+                isDark ? "bg-emerald-500/10" : "bg-emerald-50"
+              }`}
+            >
+              <span
+                className={`text-xs font-medium ${
+                  isDark ? "text-emerald-400" : "text-emerald-600"
+                }`}
+              >
+                Completed in {elapsedSeconds}s
               </span>
             </div>
           )}

@@ -4,6 +4,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useCrawler } from "./hooks/useCrawler";
 import { useStats } from "./hooks/useStats";
 import { useAutoScroll } from "./hooks/useAutoScroll";
+import { useCrawlTimer } from "./hooks/useCrawlTimer";
 import { ConfigCard } from "./components/ConfigCard";
 import { ContentPanel } from "./components/ContentPanel";
 import { Header } from "./components/Header";
@@ -61,13 +62,15 @@ export default function Home() {
     navigationIssues
   );
   const { containerRef, handleScroll, resetAutoScroll } = useAutoScroll([logs]);
+  const elapsedSeconds = useCrawlTimer(isCrawling || isDiscovering);
 
   const handleStart = (
     startUrl: string,
     sitemapUrl: string,
-    cssSelector: string
+    cssSelector: string,
+    concurrency: number
   ) => {
-    discoverLinks(startUrl, sitemapUrl, cssSelector, resetAutoScroll);
+    discoverLinks(startUrl, sitemapUrl, cssSelector, concurrency, resetAutoScroll);
   };
 
   // Get phase icon component
@@ -361,6 +364,7 @@ export default function Home() {
             isDark={isDark}
             containerRef={containerRef}
             onScroll={handleScroll}
+            elapsedSeconds={elapsedSeconds}
           />
         )}
       </main>

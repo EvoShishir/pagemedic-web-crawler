@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { parseLogMessage, extractCrawlingUrl } from "../utils/logParser";
 import { getLogStyle, getLinkStyle } from "../utils/logStyles";
+import { replaceEmojisWithIcons } from "../utils/emojiIcons";
 
 interface LogEntryProps {
   log: string;
@@ -55,7 +56,11 @@ export function LogEntry({ log, index, currentUrl, isDark }: LogEntryProps) {
               </a>
             );
           }
-          return <span key={`${index}-${partIndex}`}>{part}</span>;
+          return (
+            <span key={`${index}-${partIndex}`}>
+              {replaceEmojisWithIcons(part, `${index}-${partIndex}`)}
+            </span>
+          );
         })}
       </span>
       <div className="flex items-center gap-2 shrink-0">
