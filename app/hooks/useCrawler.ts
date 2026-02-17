@@ -137,6 +137,7 @@ export function useCrawler() {
       if (cssSelector) {
         params.append("cssSelector", cssSelector);
       }
+      params.append("concurrency", concurrency.toString());
 
       const es = new EventSource(`/api/discover?${params.toString()}`);
 

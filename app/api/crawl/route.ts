@@ -974,44 +974,32 @@ function handleCrawl(
         }
       }
 
-      // Worker loop: keep pulling from queue until empty
+      let activeWorkers = 0;
+
       async function worker(workerPage: Page, workerId: number) {
         while (true) {
           const url = queue.shift();
-          if (!url) break;
+          if (!url) {
+            if (activeWorkers === 0) break;
+            await new Promise((r) => setTimeout(r, 150));
+            continue;
+          }
           if (visited.has(url)) continue;
           visited.add(url);
+          activeWorkers++;
           await processUrl(workerPage, url, workerId);
+          activeWorkers--;
         }
       }
 
-      // Run workers with re-check: new URLs may be discovered during crawling
-      let hasWork = true;
-      while (hasWork) {
-        if (queue.length === 0) {
-          hasWork = false;
-          break;
-        }
+      sendEvent({
+        type: "log",
+        message: `📋 Queue: ${queue.length} URLs | Starting ${Math.min(concurrency, queue.length)} workers...`,
+      });
 
-        sendEvent({
-          type: "log",
-          message: `📋 Queue: ${queue.length} URLs | Starting ${Math.min(concurrency, queue.length)} workers...`,
-        });
-
-        await Promise.all(
-          pages.map((p, i) => worker(p, i + 1))
-        );
-
-        // Check if new URLs were added during processing
-        if (queue.length > 0) {
-          sendEvent({
-            type: "log",
-            message: `📊 Workers found ${queue.length} new URLs, continuing...`,
-          });
-        } else {
-          hasWork = false;
-        }
-      }
+      await Promise.all(
+        pages.map((p, i) => worker(p, i + 1))
+      );
 
       // Close all pages
       for (const p of pages) {

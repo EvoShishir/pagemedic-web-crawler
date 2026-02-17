@@ -170,6 +170,7 @@ export async function GET(request: NextRequest) {
   const startUrl = searchParams.get("startUrl");
   const sitemapUrl = searchParams.get("sitemapUrl");
   const cssSelector = searchParams.get("cssSelector") || undefined;
+  const concurrency = Math.min(Math.max(parseInt(searchParams.get("concurrency") || "3") || 3, 1), 20);
 
   if (!startUrl) {
     return new Response("Missing startUrl parameter", { status: 400 });
@@ -321,77 +322,59 @@ export async function GET(request: NextRequest) {
           });
         }
       } else {
-        // MODE 2: No sitemap - crawl pages to discover links (NO LIMIT)
+        // MODE 2: No sitemap - crawl pages to discover links with parallel workers
+        const workerCount = concurrency;
         sendEvent({
           type: "status",
           phase: "browser",
-          message: "🌐 Launching browser for page discovery...",
+          message: `🌐 Launching browser for page discovery... (${workerCount} worker${workerCount > 1 ? "s" : ""})`,
           total: discoveredLinks.size,
           fromSitemap: 0,
           pagesScanned: 0,
         });
 
         browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({
-      ignoreHTTPSErrors: true,
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    });
-
-    const page = await context.newPage();
-
-        // Visit pages to discover links - NO LIMIT when no sitemap
-    const pagesToVisit = [startUrl];
-    let pagesVisited = 0;
-        let newLinksFromPages = 0;
-
-        // Safety limit to prevent infinite crawling on huge sites
-        const MAX_PAGES_SAFETY = 5000;
-
-        while (pagesToVisit.length > 0 && pagesVisited < MAX_PAGES_SAFETY) {
-      const url = pagesToVisit.shift()!;
-      if (visited.has(url)) continue;
-      visited.add(url);
-      pagesVisited++;
-
-          const previousSize = discoveredLinks.size;
-
-          // Update every page or every 10 pages for performance
-          if (pagesVisited % 5 === 1 || pagesVisited === 1) {
-            sendEvent({
-              type: "status",
-              phase: "scanning",
-              message: `🔍 Scanning page ${pagesVisited}: ${new URL(url).pathname}`,
-              total: discoveredLinks.size,
-              fromSitemap: 0,
-              pagesScanned: pagesVisited,
-              currentUrl: url,
-            });
-          }
-
-      try {
-        await page.goto(url, {
-          waitUntil: "domcontentloaded",
-              timeout: 15000,
+        const context = await browser.newContext({
+          ignoreHTTPSErrors: true,
+          userAgent:
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         });
 
-        const links = await extractLinksFromPage(page, cssSelector);
-
-        for (const link of links) {
-          const cleanedLink = cleanUrl(link);
-          if (
-            cleanedLink.startsWith(origin) &&
-            !isNonHtmlResource(cleanedLink) &&
-            !discoveredLinks.has(cleanedLink)
-          ) {
-            discoveredLinks.add(cleanedLink);
-                newLinksFromPages++;
-                // Add to visit queue for further discovery
-                if (!visited.has(cleanedLink)) {
-              pagesToVisit.push(cleanedLink);
-            }
-          }
+        const pages: Page[] = [];
+        for (let i = 0; i < workerCount; i++) {
+          pages.push(await context.newPage());
         }
+
+        const queue: string[] = [startUrl];
+        let pagesVisited = 0;
+        let newLinksFromPages = 0;
+        const MAX_PAGES_SAFETY = 5000;
+
+        async function processPage(workerPage: Page, url: string) {
+          const previousSize = discoveredLinks.size;
+
+          try {
+            await workerPage.goto(url, {
+              waitUntil: "domcontentloaded",
+              timeout: 15000,
+            });
+
+            const links = await extractLinksFromPage(workerPage, cssSelector);
+
+            for (const link of links) {
+              const cleanedLink = cleanUrl(link);
+              if (
+                cleanedLink.startsWith(origin) &&
+                !isNonHtmlResource(cleanedLink) &&
+                !discoveredLinks.has(cleanedLink)
+              ) {
+                discoveredLinks.add(cleanedLink);
+                newLinksFromPages++;
+                if (!visited.has(cleanedLink)) {
+                  queue.push(cleanedLink);
+                }
+              }
+            }
 
             const newLinksFound = discoveredLinks.size - previousSize;
             if (newLinksFound > 0) {
@@ -404,49 +387,83 @@ export async function GET(request: NextRequest) {
                 pagesScanned: pagesVisited,
               });
             }
-      } catch {
-        // Page failed to load, skip
-      }
-
-          // Check if queue is empty (we've discovered all reachable pages)
-          if (pagesToVisit.length === 0) {
-            sendEvent({
-              type: "status",
-              phase: "scanning",
-              message: `📋 All reachable pages scanned (${pagesVisited} pages)`,
-              total: discoveredLinks.size,
-              fromSitemap: 0,
-              pagesScanned: pagesVisited,
-            });
+          } catch {
+            // Page failed to load, skip
           }
-    }
+        }
 
-    await browser.close();
+        let activeWorkers = 0;
+
+        async function worker(workerPage: Page) {
+          while (true) {
+            if (pagesVisited >= MAX_PAGES_SAFETY) break;
+
+            const url = queue.shift();
+            if (!url) {
+              if (activeWorkers === 0) break;
+              await new Promise((r) => setTimeout(r, 150));
+              continue;
+            }
+            if (visited.has(url)) continue;
+            visited.add(url);
+            activeWorkers++;
+            pagesVisited++;
+
+            if (pagesVisited % 5 === 1 || pagesVisited === 1) {
+              sendEvent({
+                type: "status",
+                phase: "scanning",
+                message: `🔍 Scanning page ${pagesVisited}: ${new URL(url).pathname}`,
+                total: discoveredLinks.size,
+                fromSitemap: 0,
+                pagesScanned: pagesVisited,
+                currentUrl: url,
+              });
+            }
+
+            await processPage(workerPage, url);
+            activeWorkers--;
+          }
+        }
+
+        await Promise.all(
+          pages.map((p) => worker(p))
+        );
+
+        sendEvent({
+          type: "status",
+          phase: "scanning",
+          message: `📋 All reachable pages scanned (${pagesVisited} pages)`,
+          total: discoveredLinks.size,
+          fromSitemap: 0,
+          pagesScanned: pagesVisited,
+        });
+
+        await browser.close();
         browser = undefined;
 
-        // Sort links by path depth first, then alphabetically
-    const sortedLinks = [...discoveredLinks].sort((a, b) => {
-      try {
-        const pathA = new URL(a).pathname;
-        const pathB = new URL(b).pathname;
+        const sortedLinks = [...discoveredLinks].sort((a, b) => {
+          try {
+            const pathA = new URL(a).pathname;
+            const pathB = new URL(b).pathname;
             const depthA = pathA.split('/').filter(Boolean).length;
             const depthB = pathB.split('/').filter(Boolean).length;
             if (depthA !== depthB) return depthA - depthB;
-        return pathA.localeCompare(pathB);
-      } catch {
-        return a.localeCompare(b);
-      }
-    });
+            return pathA.localeCompare(pathB);
+          } catch {
+            return a.localeCompare(b);
+          }
+        });
 
         sendEvent({
           type: "done",
           message: `🎉 Discovery complete! Scanned ${pagesVisited} pages, found ${sortedLinks.length} links.`,
-      links: sortedLinks,
-      total: sortedLinks.length,
+          links: sortedLinks,
+          total: sortedLinks.length,
           fromSitemap: 0,
           fromPages: newLinksFromPages,
           pagesScanned: pagesVisited,
-    });
+        });
       }
     } catch (err) {
       sendEvent({
