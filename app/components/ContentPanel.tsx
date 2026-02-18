@@ -6,13 +6,7 @@ import { EmptyState } from "./EmptyState";
 import { BrokenLinksPanel } from "./BrokenLinksPanel";
 import { BrokenImagesPanel } from "./BrokenImagesPanel";
 import { ConsoleErrorsPanel } from "./ConsoleErrorsPanel";
-import { NavigationIssuesPanel } from "./NavigationIssuesPanel";
-import {
-  BrokenLink,
-  BrokenImage,
-  ConsoleError,
-  NavigationIssue,
-} from "../types/crawler";
+import { BrokenLink, BrokenImage, ConsoleError } from "../types/crawler";
 
 // Helper function to escape CSV values
 function escapeCSV(value: string): string {
@@ -26,7 +20,7 @@ function escapeCSV(value: string): string {
 function generateCSV(
   brokenLinks: BrokenLink[],
   brokenImages: BrokenImage[],
-  consoleErrors: ConsoleError[],
+  consoleErrors: ConsoleError[]
 ): string {
   // Group all issues by page
   const pageMap = new Map<
@@ -66,7 +60,7 @@ function generateCSV(
   });
 
   // Build CSV
-  const headers = ["Page Link", "404 Links", "404 Images", "Console Errors"];
+  const headers = ["Page Link", "Broken Links", "404 Images", "Console Errors"];
   const rows: string[][] = [];
 
   pageMap.forEach((issues, page) => {
@@ -100,24 +94,19 @@ function downloadCSV(content: string, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-type TabType =
-  | "logs"
-  | "broken-links"
-  | "broken-images"
-  | "console-errors"
-  | "nav-issues";
+type TabType = "logs" | "broken-links" | "broken-images" | "console-errors";
 
 interface ContentPanelProps {
   logs: string[];
   brokenLinks: BrokenLink[];
   brokenImages: BrokenImage[];
   consoleErrors: ConsoleError[];
-  navigationIssues: NavigationIssue[];
   currentUrl: string | null;
   isCrawling: boolean;
   isDark: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
+  onResetAutoScroll: () => void;
   elapsedSeconds?: number;
 }
 
@@ -126,12 +115,12 @@ export function ContentPanel({
   brokenLinks,
   brokenImages,
   consoleErrors,
-  navigationIssues,
   currentUrl,
   isCrawling,
   isDark,
   containerRef,
   onScroll,
+  onResetAutoScroll,
   elapsedSeconds = 0,
 }: ContentPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>("logs");
@@ -142,21 +131,15 @@ export function ContentPanel({
 
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      // Show button if scrolled more than 100px from bottom
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       setShowScrollButton(!isNearBottom);
     }
   }, [onScroll, containerRef]);
 
   const scrollToBottom = useCallback(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTo({
-        top: containerRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-      setShowScrollButton(false);
-    }
-  }, [containerRef]);
+    onResetAutoScroll();
+    setShowScrollButton(false);
+  }, [onResetAutoScroll]);
 
   const tabs: {
     id: TabType;
@@ -200,26 +183,6 @@ export function ContentPanel({
             strokeLinecap="round"
             strokeLinejoin="round"
             d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-          />
-        </svg>
-      ),
-    },
-    {
-      id: "nav-issues",
-      label: "Nav Issues",
-      count: navigationIssues.length,
-      icon: (
-        <svg
-          className="w-4 h-4"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
           />
         </svg>
       ),
@@ -290,8 +253,8 @@ export function ContentPanel({
                   ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
                   : "bg-indigo-50 text-indigo-600 border border-indigo-200"
                 : isDark
-                  ? "text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-700/50"
-                  : "text-slate-500 hover:text-slate-700 border border-transparent hover:bg-slate-100"
+                ? "text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-700/50"
+                : "text-slate-500 hover:text-slate-700 border border-transparent hover:bg-slate-100"
             }`}
           >
             {tab.icon}
@@ -304,16 +267,12 @@ export function ContentPanel({
                       ? "bg-red-500/20 text-red-400"
                       : "bg-red-100 text-red-600"
                     : tab.id === "broken-images"
-                      ? isDark
-                        ? "bg-orange-500/20 text-orange-400"
-                        : "bg-orange-100 text-orange-600"
-                      : tab.id === "nav-issues"
-                        ? isDark
-                          ? "bg-amber-500/20 text-amber-400"
-                          : "bg-amber-100 text-amber-600"
-                        : isDark
-                          ? "bg-violet-500/20 text-violet-400"
-                          : "bg-violet-100 text-violet-600"
+                    ? isDark
+                      ? "bg-orange-500/20 text-orange-400"
+                      : "bg-orange-100 text-orange-600"
+                    : isDark
+                    ? "bg-violet-500/20 text-violet-400"
+                    : "bg-violet-100 text-violet-600"
                 }`}
               >
                 {tab.count}
@@ -340,13 +299,6 @@ export function ContentPanel({
                 }`}
               >
                 Live
-              </span>
-              <span
-                className={`text-xs font-mono tabular-nums ${
-                  isDark ? "text-indigo-400/70" : "text-indigo-500/70"
-                }`}
-              >
-                {elapsedSeconds}s
               </span>
             </div>
           )}
@@ -375,7 +327,7 @@ export function ContentPanel({
                 const csvContent = generateCSV(
                   brokenLinks,
                   brokenImages,
-                  consoleErrors,
+                  consoleErrors
                 );
                 const timestamp = new Date().toISOString().split("T")[0];
                 downloadCSV(csvContent, `crawler-issues-${timestamp}.csv`);
@@ -445,13 +397,6 @@ export function ContentPanel({
 
         {activeTab === "console-errors" && (
           <ConsoleErrorsPanel consoleErrors={consoleErrors} isDark={isDark} />
-        )}
-
-        {activeTab === "nav-issues" && (
-          <NavigationIssuesPanel
-            navigationIssues={navigationIssues}
-            isDark={isDark}
-          />
         )}
       </div>
 

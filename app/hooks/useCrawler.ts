@@ -4,7 +4,6 @@ import {
   BrokenLink,
   BrokenImage,
   ConsoleError,
-  NavigationIssue,
   CrawlerEventData,
   DiscoveryEventData,
 } from "../types/crawler";
@@ -31,9 +30,6 @@ export function useCrawler() {
   const [brokenLinks, setBrokenLinks] = useState<BrokenLink[]>([]);
   const [brokenImages, setBrokenImages] = useState<BrokenImage[]>([]);
   const [consoleErrors, setConsoleErrors] = useState<ConsoleError[]>([]);
-  const [navigationIssues, setNavigationIssues] = useState<NavigationIssue[]>(
-    []
-  );
   const [isCrawling, setIsCrawling] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
@@ -45,7 +41,7 @@ export function useCrawler() {
   const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set());
   const [pendingStartUrl, setPendingStartUrl] = useState<string>("");
   const [pendingSitemapUrl, setPendingSitemapUrl] = useState<string>("");
-  const [pendingCssSelector, setPendingCssSelector] = useState<string>("");
+
   const [pendingConcurrency, setPendingConcurrency] = useState<number>(3);
   const [pendingResetCallback, setPendingResetCallback] = useState<
     (() => void) | null
@@ -88,7 +84,7 @@ export function useCrawler() {
     setSelectedLinks(new Set());
     setPendingStartUrl("");
     setPendingSitemapUrl("");
-    setPendingCssSelector("");
+
     setPendingConcurrency(3);
     setPendingResetCallback(null);
   }, [discoveryEventSource]);
@@ -98,7 +94,6 @@ export function useCrawler() {
     (
       startUrl: string,
       sitemapUrl: string,
-      cssSelector: string,
       concurrency: number,
       onResetAutoScroll?: () => void
     ) => {
@@ -119,7 +114,6 @@ export function useCrawler() {
       setPhase("discovering");
       setPendingStartUrl(startUrl);
       setPendingSitemapUrl(sitemapUrl);
-      setPendingCssSelector(cssSelector);
       setPendingConcurrency(concurrency);
       setPendingResetCallback(() => onResetAutoScroll || null);
       setDiscoveryProgress({
@@ -133,9 +127,6 @@ export function useCrawler() {
       const params = new URLSearchParams({ startUrl });
       if (sitemapUrl) {
         params.append("sitemapUrl", sitemapUrl);
-      }
-      if (cssSelector) {
-        params.append("cssSelector", cssSelector);
       }
       params.append("concurrency", concurrency.toString());
 
@@ -197,7 +188,7 @@ export function useCrawler() {
   );
 
   // Start crawl with selected links
-  const startCrawlWithSelection = useCallback(() => {
+  const startCrawlWithSelection = useCallback((cssSelector?: string) => {
     if (selectedLinks.size === 0) {
       showAlert(
         "No Links Selected",
@@ -212,12 +203,10 @@ export function useCrawler() {
     setBrokenLinks([]);
     setBrokenImages([]);
     setConsoleErrors([]);
-    setNavigationIssues([]);
     setIsCrawling(true);
     setDiscoveryProgress(null);
     pendingResetCallback?.();
 
-    // Use POST request with fetch to avoid URL length limits
     const abortController = new AbortController();
 
     (async () => {
@@ -228,10 +217,9 @@ export function useCrawler() {
           body: JSON.stringify({
             startUrl: pendingStartUrl,
             sitemapUrl: pendingSitemapUrl || undefined,
-            cssSelector: pendingCssSelector || undefined,
+            cssSelector: cssSelector || undefined,
             concurrency: pendingConcurrency,
             selectedUrls: [...selectedLinks],
-            // Pass all discovered URLs so sitemap links can be skipped from validation
             allDiscoveredUrls: discoveredLinks,
           }),
           signal: abortController.signal,
@@ -293,14 +281,6 @@ export function useCrawler() {
                       data.data as ConsoleError,
                     ]);
                   }
-                } else if (data.type === "navigation_issue") {
-                  setLogs((prev) => [...prev, data.message!]);
-                  if (data.data) {
-                    setNavigationIssues((prev) => [
-                      ...prev,
-                      data.data as NavigationIssue,
-                    ]);
-                  }
                 } else if (data.type === "prompt") {
                   const shouldContinue = window.confirm(data.message!);
                   fetch("/api/crawl/response", {
@@ -349,7 +329,6 @@ export function useCrawler() {
     selectedLinks,
     pendingStartUrl,
     pendingSitemapUrl,
-    pendingCssSelector,
     pendingConcurrency,
     pendingResetCallback,
     discoveredLinks,
@@ -363,7 +342,7 @@ export function useCrawler() {
     setSelectedLinks(new Set());
     setPendingStartUrl("");
     setPendingSitemapUrl("");
-    setPendingCssSelector("");
+
     setPendingConcurrency(3);
     setPendingResetCallback(null);
     setDiscoveryProgress(null);
@@ -390,7 +369,6 @@ export function useCrawler() {
     brokenLinks,
     brokenImages,
     consoleErrors,
-    navigationIssues,
     isCrawling,
     isDiscovering,
     currentUrl,

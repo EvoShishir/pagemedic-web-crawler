@@ -333,7 +333,7 @@ export async function GET(request: NextRequest) {
           pagesScanned: 0,
         });
 
-        browser = await chromium.launch({ headless: true });
+        browser = await chromium.launch({ headless: true, args: ["--disable-http2"] });
         const context = await browser.newContext({
           ignoreHTTPSErrors: true,
           userAgent:

@@ -1,6 +1,6 @@
 # PageMedic
 
-A modern, real-time web crawler built with Next.js and Playwright that crawls websites, detects broken links (internal & external), broken images, console errors, and navigation issues—streaming results live to your browser.
+A modern, real-time web crawler built with Next.js and Playwright that crawls websites, detects broken links (internal & external), broken images, console errors, and meta tag URLs—streaming results live to your browser.
 
 ![PageMedic](https://img.shields.io/badge/PageMedic-v2.0-indigo?style=flat-square)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)
@@ -9,17 +9,19 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 
 ## Overview
 
-**PageMedic** is a powerful web health checker that uses Playwright's Chromium browser to diagnose your website. It detects broken internal and external links, broken images, console errors, and navigation issues—tracking where problems originate and displaying all events in real-time. Perfect for website auditing, SEO analysis, and quality assurance.
+**PageMedic** is a powerful web health checker that uses Playwright's Chromium browser to diagnose your website. It detects broken internal and external links, broken images, console errors, and meta tag URLs—tracking where problems originate and displaying all events in real-time. Perfect for website auditing, SEO analysis, and quality assurance.
 
 ## Features
 
 ### 🔗 Broken Link Detection
 - **Internal & External Links**: Checks both internal links and external links on your pages
+- **Timeout & Connection Failures**: Unreachable URLs (timeouts, connection refused) are reported as broken links with status 0
 - **Status Code Categorization**: Filter by status code type with built-in tabs:
   - **404 Not Found** — Truly broken links that need fixing
   - **401 Unauthorized** — Pages requiring authentication
   - **403 Forbidden** — Access denied (may be intentional)
   - **5xx Server Errors** — Server-side issues
+  - **Unreachable (0)** — Timeouts and connection failures
 - **Source Page Tracking**: Shows exactly which page contains the broken link
 - **Link Text & Context**: Displays the anchor text and HTML element location (nav, footer, etc.)
 - **Referrer Tracking**: When a page returns 404, see all pages that link to it
@@ -31,10 +33,12 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 - **Element Context**: Shows which section of the page contains the broken image
 - **Failure Reason**: Displays why the image failed (HTTP 404, zero width, incomplete load)
 
-### ⚠️ Navigation Issues
-- **Separate from Broken Links**: Timeouts and connection failures are tracked separately
-- **False Positive Prevention**: Navigation issues may work when accessed directly
-- **Grouped by Reason**: Issues are grouped by error type for easier analysis
+### 🔗 Meta Tag URL Verification
+- **Open Graph & Twitter Cards**: Validates `og:url`, `og:image`, `twitter:image`, etc.
+- **Canonical & Alternate Links**: Checks `<link rel="canonical">`, `<link rel="alternate">`, hreflang links
+- **JSON-LD Structured Data**: Recursively extracts and validates URLs from `<script type="application/ld+json">`
+- **Meta Refresh**: Validates redirect URLs in `<meta http-equiv="refresh">`
+- **Deduplication**: Each URL is checked only once across all sources (links, images, meta tags)
 
 ### 🖥️ Console Errors
 - **JavaScript Error Detection**: Captures runtime JS errors
@@ -50,9 +54,9 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 - **Select All / Deselect All**: Quickly manage large link lists
 
 ### 📊 Real-time Dashboard
-- **Tabbed Interface**: Activity Log, Broken Links, Broken Images, Console Errors, Nav Issues
+- **Tabbed Interface**: Activity Log, Broken Links, Broken Images, Console Errors
 - **Live Statistics**: Track pages crawled, broken links, broken images, errors, and warnings
-- **Crawl Timer**: Real-time elapsed seconds counter during crawling, with completion time displayed after
+- **Crawl Timer**: Shows total elapsed time after crawling completes
 - **Expandable Details**: Click on any item to see full details
 - **Copy URLs**: One-click copy for broken URLs
 - **Clickable Source Pages**: Jump directly to the page containing the issue
@@ -61,15 +65,19 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 - **Light/Dark Theme**: Toggle between themes with smooth transitions
 - **React Icons**: All UI icons use react-icons (Heroicons 2) instead of emojis for a clean, consistent look
 - **Scroll to Bottom Button**: Appears when scrolled up in the activity log
-- **Auto-scroll**: Logs auto-scroll when at bottom, pause when reviewing
-- **Live Indicator**: Pulsing indicator shows when crawling is active, with elapsed time
+- **Smart Auto-scroll**: Logs auto-scroll when at bottom, pauses when scrolled up, re-locks on "scroll to bottom" click
+- **Live Indicator**: Pulsing indicator shows when crawling is active
 - **Responsive Design**: Works on desktop and tablet screens
 - **Form Submission**: Press Enter in URL fields to start crawling
 
 ### ⚙️ Smart Crawling
 - **Parallel Workers**: Configurable 1–20 concurrent browser pages for faster crawling
 - **Sitemap Support**: Import URLs from sitemap.xml with sitemap index support
-- **CSS Selector Scoping**: Only check links & images within a specific selector (e.g., `.main-content`)
+- **CSS Selector Scoping**: Set in the Link Preview panel before crawling to scope link & image checking
+- **Meta Tag Crawling**: Extracts and validates URLs from Open Graph, Twitter Cards, canonical, hreflang, JSON-LD, and meta refresh tags
+- **HTTP/1.1 Mode**: Disables HTTP/2 to prevent `ERR_HTTP2_PROTOCOL_ERROR` with concurrent workers
+- **Retry Logic**: Automatic retries with exponential backoff for transient network errors
+- **HEAD Request Fallback**: When page navigation fails, verifies the URL via a HEAD request before reporting it broken
 - **No Page Limit**: Crawl your entire site without artificial limits
 - **Header Link Handling**: Intelligently handles navigation/header links
 - **SSL Certificate Handling**: Works with self-signed certificates
@@ -83,7 +91,7 @@ A modern, real-time web crawler built with Next.js and Playwright that crawls we
 - **CORS Error Filtering**: Ignores cross-origin resource errors
 - **ERR_ABORTED Filtering**: Ignores navigation cancellation errors
 - **PDF/Document Handling**: Checks documents via HEAD request instead of navigation
-- **Navigation vs Broken**: Timeouts tracked separately from actual 404s
+- **HEAD Fallback**: Unreachable pages verified via HEAD request before marking broken
 
 ## Screenshots
 
@@ -115,13 +123,6 @@ Each card shows:
 - **Source page** (where to fix it)
 - Link text and element location
 - Color-coded by severity (red for 404, amber for auth, purple for server errors)
-
-### Navigation Issues Panel
-Separate tracking for:
-- Timeout errors
-- Connection failures
-- Grouped by error reason
-- Informational banner explaining these may be false positives
 
 ## Installation
 
@@ -173,37 +174,30 @@ pnpm start
    - Example: `https://example.com/sitemap.xml`
    - Supports sitemap index files
 
-3. **Enter CSS Selector** (optional)
-   - Only check links & images within specific elements
-   - Examples:
-     - `.main-content` — Only check inside elements with this class
-     - `#article-body` — Only check inside element with this ID
-     - `article, .post-content` — Multiple selectors supported
-   - Great for ignoring navigation, footer, and sidebar links
-
-4. **Set Parallel Workers** (optional, default 3)
+3. **Set Parallel Workers** (optional, default 3)
    - Drag the slider to choose 1–20 concurrent browser pages
    - Higher values crawl faster but use more RAM
    - See the [Parallel Workers Guide](#parallel-workers-guide) for recommendations
 
-5. **Click "Start Crawl" or press Enter**
+4. **Click "Start Crawl" or press Enter**
    - PageMedic discovers all links first
    - Watch real-time discovery progress
 
-6. **Select Pages to Crawl**
+5. **Select Pages to Crawl**
    - Review discovered links in the preview
    - Use checkboxes or Shift+Click to select ranges
+   - Optionally set a **CSS Selector** to scope link/image checking
    - Click "Start Crawl" to begin
 
-7. **Review Issues**
-   - Switch between tabs: Activity Log, Broken Links, Broken Images, Console Errors, Nav Issues
-   - **Broken Links Tab**: Use sub-tabs to filter by status code (404, 401, 403, 5xx)
-   - The elapsed time counter shows how long the crawl has been running
+6. **Review Issues**
+   - Switch between tabs: Activity Log, Broken Links, Broken Images, Console Errors
+   - **Broken Links Tab**: Use sub-tabs to filter by status code (404, 401, 403, 5xx, Unreachable)
+   - Completion time shows how long the crawl took
    - Click on any card to expand details
    - "FIX HERE" label shows which page to edit
    - Click source page link to visit it directly
 
-8. **Stop Anytime**
+7. **Stop Anytime**
    - Click "Stop" to halt crawling gracefully
 
 ### Understanding the Results
@@ -214,6 +208,7 @@ Filter by status code using the tabs at the top:
 - **401 Unauthorized**: Pages requiring login — may not be broken
 - **403 Forbidden**: Access denied — could be intentional (admin areas)
 - **5xx Server Errors**: Server issues — usually temporary
+- **Unreachable (0)**: Timeouts and connection failures — verified via HEAD request fallback
 
 Each broken link shows:
 - **Status Code**: HTTP error code with descriptive label
@@ -221,13 +216,6 @@ Each broken link shows:
 - **Source Page**: The page containing the link (where you need to fix it!)
 - **Link Text**: The anchor text of the broken link
 - **Element Location**: HTML context like `<nav>`, `<footer.links>`, etc.
-
-#### Navigation Issues Panel
-Separate from broken links, shows:
-- **URL**: The URL that failed to load
-- **Reason**: Why it failed (timeout, connection refused, etc.)
-- **Source Page**: Where the link was found
-- **Note**: These may work when accessed directly
 
 #### Console Errors Panel
 JavaScript and console errors:
@@ -279,11 +267,12 @@ Log messages use react-icons (Heroicons 2) in the UI. The table below shows the 
 
 ### Data Flow
 1. User submits start URL → Discovery API streams found links
-2. User selects links → Crawl API receives selection via POST
-3. Playwright launches headless Chromium with N worker pages
-4. Workers pull from a shared queue → Extract links, check internal & external
-5. Broken resources → Look up referrer, send to client
-6. Client receives events → Updates UI in real-time with elapsed timer
+2. User selects links and optionally sets CSS selector → Crawl API receives selection via POST
+3. Playwright launches headless Chromium (HTTP/1.1) with N worker pages
+4. Workers pull from a shared queue → Extract links, images, and meta tag URLs
+5. Each URL is deduplicated and validated (HEAD fallback for failed navigations)
+6. Broken resources → Look up referrer, send to client
+7. Client receives events → Updates UI in real-time, shows elapsed time on completion
 
 ## Configuration
 
@@ -293,7 +282,7 @@ Log messages use react-icons (Heroicons 2) in the UI. The table below shows the 
 |-------|----------|-------------|
 | Start URL | Yes | The URL to begin crawling from |
 | Sitemap URL | No | Path to sitemap.xml for comprehensive discovery |
-| CSS Selector | No | Scope link/image checking to specific elements |
+| CSS Selector | No | Scope link/image checking to specific elements (set in Link Preview panel) |
 | Parallel Workers | No | Number of concurrent browser pages (1–20, default 3) |
 
 ### CSS Selector Examples
@@ -363,7 +352,6 @@ app/
 │   ├── BrokenLinksPanel.tsx  # Broken links display
 │   ├── BrokenImagesPanel.tsx # Broken images display
 │   ├── ConsoleErrorsPanel.tsx # Console errors display
-│   ├── NavigationIssuesPanel.tsx # Navigation issues display
 │   ├── ContentPanel.tsx      # Tabbed content area
 │   ├── ConfigCard.tsx        # URL input & stats
 │   ├── LinkPreviewPanel.tsx  # Link selection preview
@@ -397,8 +385,11 @@ app/
 
 - [x] Export results to CSV
 - [x] Parallel browser workers (1–20 concurrent pages)
-- [x] Crawl timer with elapsed seconds
+- [x] Crawl timer with completion time
 - [x] React Icons replacing emojis
+- [x] Meta tag URL verification (OG, canonical, hreflang, JSON-LD)
+- [x] HTTP/2 error mitigation and retry logic
+- [x] HEAD request fallback for unreachable pages
 - [ ] Crawl depth limiting
 - [ ] Authentication support (login flows)
 - [ ] Screenshot capture on errors

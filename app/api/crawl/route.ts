@@ -2,7 +2,7 @@ import { chromium, Page, Request, Response as PlaywrightResponse } from "playwri
 import { NextRequest } from "next/server";
 import https from "https";
 import http from "http";
-import { BrokenLink, BrokenImage, ConsoleError, NavigationIssue } from "../../types/crawler";
+import { BrokenLink, BrokenImage, ConsoleError } from "../../types/crawler";
 
 // Domains that commonly block automated requests (false positives)
 const SKIP_EXTERNAL_DOMAINS = [
@@ -311,6 +311,73 @@ async function extractImagesWithContext(page: Page, cssSelector?: string): Promi
   });
 }
 
+// Extract URLs from meta tags, link elements, and JSON-LD in page source
+async function extractMetaUrls(page: Page): Promise<
+  Array<{ url: string; context: string }>
+> {
+  return page.evaluate(() => {
+    const results: Array<{ url: string; context: string }> = [];
+    const seen = new Set<string>();
+
+    function addUrl(url: string, context: string) {
+      if (!url || seen.has(url)) return;
+      try {
+        const parsed = new URL(url, window.location.href);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          seen.add(parsed.href);
+          results.push({ url: parsed.href, context });
+        }
+      } catch { /* invalid URL */ }
+    }
+
+    // <link> elements (canonical, alternate, stylesheet, icon, etc.)
+    document.querySelectorAll("link[href]").forEach((el) => {
+      const link = el as HTMLLinkElement;
+      const rel = link.getAttribute("rel") || "unknown";
+      addUrl(link.href, `<link rel="${rel}">`);
+    });
+
+    // <meta property="og:*"> and <meta name="twitter:*">
+    document.querySelectorAll('meta[property^="og:"], meta[name^="twitter:"]').forEach((el) => {
+      const meta = el as HTMLMetaElement;
+      const name = meta.getAttribute("property") || meta.getAttribute("name") || "";
+      const content = meta.getAttribute("content") || "";
+      if (content.startsWith("http")) {
+        addUrl(content, `<meta ${name}>`);
+      }
+    });
+
+    // <meta http-equiv="refresh">
+    document.querySelectorAll('meta[http-equiv="refresh"]').forEach((el) => {
+      const content = el.getAttribute("content") || "";
+      const urlMatch = content.match(/url\s*=\s*['"]?(https?:\/\/[^'";\s]+)/i);
+      if (urlMatch) {
+        addUrl(urlMatch[1], `<meta http-equiv="refresh">`);
+      }
+    });
+
+    // JSON-LD structured data
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((el) => {
+      try {
+        const json = JSON.parse(el.textContent || "");
+        const extractUrls = (obj: unknown, depth: number) => {
+          if (depth > 5) return;
+          if (typeof obj === "string" && obj.startsWith("http")) {
+            addUrl(obj, "<script ld+json>");
+          } else if (Array.isArray(obj)) {
+            obj.forEach((item) => extractUrls(item, depth + 1));
+          } else if (obj && typeof obj === "object") {
+            Object.values(obj).forEach((val) => extractUrls(val, depth + 1));
+          }
+        };
+        extractUrls(json, 0);
+      } catch { /* invalid JSON */ }
+    });
+
+    return results;
+  });
+}
+
 // Parse 404 error from console message
 function parse404FromConsoleError(message: string): { url: string; status: number } | null {
   // Skip CORS and other ignorable errors
@@ -452,7 +519,7 @@ function handleCrawl(
         sendEvent({ type: "log", message: `🎯 CSS selector active: ${cssSelector}` });
       }
 
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ["--disable-http2"] });
       const context = await browser.newContext({
         ignoreHTTPSErrors: true,
       });
@@ -475,7 +542,7 @@ function handleCrawl(
       let totalCrawled = 0;
       let brokenLinksCount = 0;
       let brokenImagesCount = 0;
-      let navigationIssuesCount = 0;
+      
 
       // Track which URL each page is currently processing
       const pageCurrentUrl = new Map<Page, string>();
@@ -725,10 +792,26 @@ function handleCrawl(
         });
 
         try {
-          const response = await workerPage.goto(url, {
-            waitUntil: "domcontentloaded",
-            timeout: 30000,
-          });
+          const MAX_RETRIES = 3;
+          let response: Awaited<ReturnType<Page["goto"]>> = null;
+          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+              response = await workerPage.goto(url, {
+                waitUntil: "domcontentloaded",
+                timeout: 30000,
+              });
+              break;
+            } catch (navErr: unknown) {
+              const msg = navErr instanceof Error ? navErr.message : "";
+              const isRetryable = /ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_TIMED_OUT|ERR_HTTP2|ERR_NETWORK_CHANGED|ERR_SOCKET_NOT_CONNECTED/.test(msg);
+              if (isRetryable && attempt < MAX_RETRIES) {
+                sendEvent({ type: "log", message: `${wTag}⚠️ Retry ${attempt}/${MAX_RETRIES} for ${url}` });
+                await new Promise((r) => setTimeout(r, 2000 * attempt));
+                continue;
+              }
+              throw navErr;
+            }
+          }
           
           await workerPage.waitForTimeout(2000);
 
@@ -857,11 +940,12 @@ function handleCrawl(
                   data: { url: link.url, statusCode: status, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
                 });
               } else if (status === 0) {
-                navigationIssuesCount++;
+                brokenCount++;
+                brokenLinksCount++;
                 sendEvent({
-                  type: "navigation_issue",
-                  message: `${wTag}   ↳ ⚠️ [Timeout] ${link.url}`,
-                  data: { url: link.url, reason: "Connection failed or timeout", foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as NavigationIssue,
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [Unreachable] ${link.url}`,
+                  data: { url: link.url, statusCode: 0, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
                 });
               } else {
                 sendEvent({ type: "log", message: `${wTag}   ↳ ✓ [${status}] OK` });
@@ -909,11 +993,12 @@ function handleCrawl(
                   data: { url: link.href, statusCode: status, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
                 });
               } else if (status === 0) {
-                navigationIssuesCount++;
+                externalBroken++;
+                brokenLinksCount++;
                 sendEvent({
-                  type: "navigation_issue",
-                  message: `${wTag}   ↳ ⚠️ [Timeout] ${link.href}`,
-                  data: { url: link.href, reason: "Connection failed or timeout (external)", foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as NavigationIssue,
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [Unreachable] ${link.href}`,
+                  data: { url: link.href, statusCode: 0, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
                 });
               } else {
                 sendEvent({ type: "log", message: `${wTag}   ↳ ✓ [${status}] OK` });
@@ -955,20 +1040,68 @@ function handleCrawl(
               });
             }
           }
+
+          // Check meta/source URLs (canonical, og:*, twitter:*, JSON-LD, etc.)
+          const metaUrls = await extractMetaUrls(workerPage);
+          const uncheckedMeta = metaUrls.filter((m) => !checkedResources.has(m.url));
+          if (uncheckedMeta.length > 0) {
+            sendEvent({ type: "log", message: `${wTag}📄 Found ${uncheckedMeta.length} meta/source URLs to verify` });
+            let metaBroken = 0;
+            for (const meta of uncheckedMeta) {
+              checkedResources.add(meta.url);
+              const { status, ok } = await checkUrlStatus(meta.url);
+              if (!ok && status >= 400) {
+                metaBroken++;
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [${status}] ${meta.url} (${meta.context})`,
+                  data: { url: meta.url, statusCode: status, foundOnPage: url, linkText: meta.context, elementContext: meta.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              } else if (status === 0) {
+                metaBroken++;
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [Unreachable] ${meta.url} (${meta.context})`,
+                  data: { url: meta.url, statusCode: 0, foundOnPage: url, linkText: meta.context, elementContext: meta.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              }
+            }
+            if (metaBroken > 0) {
+              sendEvent({ type: "log", message: `${wTag}📄 Meta URLs: ${uncheckedMeta.length} checked, ${metaBroken} broken` });
+            }
+          }
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : "Navigation failed";
-          sendEvent({ type: "log", message: `${wTag}⚠️ Navigation error: ${errMsg} | Page: ${url}` });
-          
-          const references = getLinkReferences(url);
-          if (references.length > 0 && !checkedResources.has(url)) {
+          sendEvent({ type: "log", message: `${wTag}⚠️ Navigation failed, trying HEAD request: ${url}` });
+
+          if (!checkedResources.has(url)) {
             checkedResources.add(url);
-            for (const ref of references) {
-              navigationIssuesCount++;
-              sendEvent({
-                type: "navigation_issue",
-                message: `${wTag}⚠️ Navigation issue: ${url} | Reason: ${errMsg}`,
-                data: { url, reason: errMsg, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as NavigationIssue,
-              });
+            const { status, ok } = await checkUrlStatus(url);
+
+            if (ok) {
+              sendEvent({ type: "log", message: `${wTag}   ↳ ✓ HEAD request OK [${status}] — page is slow but reachable` });
+            } else {
+              const effectiveStatus = status > 0 ? status : 0;
+              const references = getLinkReferences(url);
+              if (references.length > 0) {
+                for (const ref of references) {
+                  brokenLinksCount++;
+                  sendEvent({
+                    type: "broken_link",
+                    message: `${wTag}   ↳ ❌ [${effectiveStatus || "Unreachable"}] ${url}`,
+                    data: { url, statusCode: effectiveStatus, foundOnPage: ref.foundOnPage, linkText: ref.linkText, elementContext: ref.elementContext, timestamp: new Date().toISOString() } as BrokenLink,
+                  });
+                }
+              } else {
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [${effectiveStatus || "Unreachable"}] ${url}`,
+                  data: { url, statusCode: effectiveStatus, foundOnPage: "[Unknown source]", linkText: "[Unknown]", elementContext: "<unknown>", timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              }
             }
           }
         }
@@ -1010,7 +1143,7 @@ function handleCrawl(
 
       sendEvent({
         type: "done",
-        message: `\n🏁 Crawl complete. Pages: ${visited.size} | Broken Links: ${brokenLinksCount} | Broken Images: ${brokenImagesCount} | Nav Issues: ${navigationIssuesCount}`,
+        message: `\n🏁 Crawl complete. Pages: ${visited.size} | Broken Links: ${brokenLinksCount} | Broken Images: ${brokenImagesCount}`,
       });
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";

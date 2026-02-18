@@ -7,7 +7,7 @@ interface LinkPreviewPanelProps {
   links: string[];
   selectedLinks: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
-  onConfirm: () => void;
+  onConfirm: (cssSelector: string) => void;
   onCancel: () => void;
   isDark: boolean;
 }
@@ -23,12 +23,15 @@ export function LinkPreviewPanel({
   // Anchor index is the starting point for shift+click range selection
   const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
   // The action that will be applied to the range (select or deselect)
-  const [anchorAction, setAnchorAction] = useState<"select" | "deselect">("select");
+  const [anchorAction, setAnchorAction] = useState<"select" | "deselect">(
+    "select"
+  );
   // Track if shift is being held for visual preview
   const [isShiftHeld, setIsShiftHeld] = useState(false);
   // Current hover index for showing range preview
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [cssSelector, setCssSelector] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Track shift key state
@@ -69,8 +72,13 @@ export function LinkPreviewPanel({
   };
 
   // Calculate the range that would be affected by shift+click
-  const getPreviewRange = useCallback((): { start: number; end: number; action: "select" | "deselect" } | null => {
-    if (!isShiftHeld || anchorIndex === null || hoverIndex === null) return null;
+  const getPreviewRange = useCallback((): {
+    start: number;
+    end: number;
+    action: "select" | "deselect";
+  } | null => {
+    if (!isShiftHeld || anchorIndex === null || hoverIndex === null)
+      return null;
     const start = Math.min(anchorIndex, hoverIndex);
     const end = Math.max(anchorIndex, hoverIndex);
     return { start, end, action: anchorAction };
@@ -79,10 +87,13 @@ export function LinkPreviewPanel({
   const previewRange = getPreviewRange();
 
   // Check if an index is in the preview range
-  const isInPreviewRange = useCallback((index: number): boolean => {
-    if (!previewRange) return false;
-    return index >= previewRange.start && index <= previewRange.end;
-  }, [previewRange]);
+  const isInPreviewRange = useCallback(
+    (index: number): boolean => {
+      if (!previewRange) return false;
+      return index >= previewRange.start && index <= previewRange.end;
+    },
+    [previewRange]
+  );
 
   // Handle individual link toggle
   const handleLinkClick = useCallback(
@@ -155,13 +166,13 @@ export function LinkPreviewPanel({
       if (e.key === "Escape") {
         onCancel();
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        onConfirm();
+        onConfirm(cssSelector);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel, onConfirm]);
+  }, [onCancel, onConfirm, cssSelector]);
 
   const selectedCount = selectedLinks.size;
   const totalCount = links.length;
@@ -218,8 +229,11 @@ export function LinkPreviewPanel({
                 }`}
               >
                 {isShiftHeld && anchorIndex !== null ? (
-                  <span className={isDark ? "text-amber-400" : "text-amber-600"}>
-                    Click to {anchorAction} range from anchor (<HiOutlineLink className="inline w-3.5 h-3.5" />)
+                  <span
+                    className={isDark ? "text-amber-400" : "text-amber-600"}
+                  >
+                    Click to {anchorAction} range from anchor (
+                    <HiOutlineLink className="inline w-3.5 h-3.5" />)
                   </span>
                 ) : (
                   "Click to toggle • Hold Shift to select range"
@@ -243,7 +257,8 @@ export function LinkPreviewPanel({
                     : "bg-orange-100 text-orange-600"
                 }`}
               >
-                {previewRange.action === "select" ? "+" : "−"}{previewRange.end - previewRange.start + 1} in range
+                {previewRange.action === "select" ? "+" : "−"}
+                {previewRange.end - previewRange.start + 1} in range
               </span>
             )}
             <span
@@ -317,7 +332,9 @@ export function LinkPreviewPanel({
                 : "bg-slate-200 text-slate-600 hover:bg-slate-300"
             }`}
           >
-            {selectedLinks.size === links.length ? "Deselect All" : "Select All"}
+            {selectedLinks.size === links.length
+              ? "Deselect All"
+              : "Select All"}
           </button>
 
           {searchQuery && filteredLinks.length !== links.length && (
@@ -360,10 +377,12 @@ export function LinkPreviewPanel({
               const linkNumber = links.indexOf(link) + 1;
               const isAnchor = anchorIndex === index;
               const inRange = isInPreviewRange(index);
-              
+
               // Determine what the item will become if shift+clicked
-              const willBeSelected = inRange && previewRange?.action === "select";
-              const willBeDeselected = inRange && previewRange?.action === "deselect";
+              const willBeSelected =
+                inRange && previewRange?.action === "select";
+              const willBeDeselected =
+                inRange && previewRange?.action === "deselect";
 
               return (
                 <div
@@ -423,9 +442,14 @@ export function LinkPreviewPanel({
                     }`}
                   >
                     {/* Show check for selected items, or preview check for items that will be selected */}
-                    {(isSelected && !(inRange && willBeDeselected)) || (inRange && willBeSelected && !isSelected) ? (
+                    {(isSelected && !(inRange && willBeDeselected)) ||
+                    (inRange && willBeSelected && !isSelected) ? (
                       <svg
-                        className={`w-3 h-3 ${inRange && willBeSelected && !isSelected ? "animate-pulse" : ""}`}
+                        className={`w-3 h-3 ${
+                          inRange && willBeSelected && !isSelected
+                            ? "animate-pulse"
+                            : ""
+                        }`}
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -478,7 +502,11 @@ export function LinkPreviewPanel({
                         : "text-slate-400"
                     }`}
                   >
-                    {isAnchor && isShiftHeld ? <HiOutlineLink className="inline w-3.5 h-3.5" /> : `#${linkNumber}`}
+                    {isAnchor && isShiftHeld ? (
+                      <HiOutlineLink className="inline w-3.5 h-3.5" />
+                    ) : (
+                      `#${linkNumber}`
+                    )}
                   </span>
 
                   {/* Link path */}
@@ -543,40 +571,69 @@ export function LinkPreviewPanel({
 
       {/* Footer with actions */}
       <div
-        className={`px-4 py-3 border-t flex items-center justify-between ${
+        className={`px-4 py-3 border-t space-y-3 ${
           isDark
             ? "bg-zinc-800/95 border-zinc-700"
             : "bg-white/95 border-slate-200"
         }`}
       >
-        <p
-          className={`text-xs ${isDark ? "text-zinc-500" : "text-slate-500"}`}
-        >
-          Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 text-[10px]">⌘</kbd>+<kbd className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 text-[10px]">Enter</kbd> to confirm
-        </p>
+        <div className="flex items-center justify-between">
+          {/* <p
+            className={`text-xs ${isDark ? "text-zinc-500" : "text-slate-500"}`}
+          >
+            Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 text-[10px]">⌘</kbd>+<kbd className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 text-[10px]">Enter</kbd> to confirm
+          </p> */}
+          <div className="flex items-center gap-3">
+            <label
+              className={`text-xs font-medium whitespace-nowrap ${
+                isDark ? "text-zinc-400" : "text-slate-500"
+              }`}
+            >
+              CSS Selector
+              <span
+                className={`ml-1 ${
+                  isDark ? "text-zinc-600" : "text-slate-400"
+                }`}
+              >
+                (optional)
+              </span>
+            </label>
+            <input
+              type="text"
+              value={cssSelector}
+              onChange={(e) => setCssSelector(e.target.value)}
+              placeholder=".main-content, #article-body"
+              className={`flex-1 px-3 py-1.5 w-80 rounded-lg border text-sm font-mono transition-colors ${
+                isDark
+                  ? "bg-zinc-900 border-zinc-600 text-white placeholder-zinc-500 focus:border-indigo-500"
+                  : "bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-indigo-400"
+              } focus:outline-none focus:ring-2 focus:ring-indigo-500/20`}
+            />
+          </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onCancel}
-            className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              isDark
-                ? "bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
-                : "bg-slate-200 text-slate-600 hover:bg-slate-300"
-            }`}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={selectedCount === 0}
-            className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              isDark
-                ? "bg-indigo-500 text-white hover:bg-indigo-400"
-                : "bg-indigo-500 text-white hover:bg-indigo-600"
-            }`}
-          >
-            Start Crawl ({selectedCount} links)
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onCancel}
+              className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isDark
+                  ? "bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+                  : "bg-slate-200 text-slate-600 hover:bg-slate-300"
+              }`}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onConfirm(cssSelector)}
+              disabled={selectedCount === 0}
+              className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                isDark
+                  ? "bg-indigo-500 text-white hover:bg-indigo-400"
+                  : "bg-indigo-500 text-white hover:bg-indigo-600"
+              }`}
+            >
+              Start Crawl ({selectedCount} links)
+            </button>
+          </div>
         </div>
       </div>
     </div>

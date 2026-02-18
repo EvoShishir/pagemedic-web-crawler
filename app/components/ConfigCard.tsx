@@ -1,22 +1,24 @@
 import { useState } from "react";
-import { Header } from "./Header";
 import { StatsGrid } from "./StatsGrid";
 import { CrawlButtons } from "./CrawlButtons";
 import { CrawlerStats } from "../hooks/useStats";
 
 interface ConfigCardProps {
   isDark: boolean;
-  onToggleTheme: () => void;
+  onToggleTheme?: () => void;
   stats: CrawlerStats;
   isCrawling: boolean;
   isDiscovering: boolean;
-  onStartCrawl: (startUrl: string, sitemapUrl: string, cssSelector: string, concurrency: number) => void;
+  onStartCrawl: (
+    startUrl: string,
+    sitemapUrl: string,
+    concurrency: number
+  ) => void;
   onStop: () => void;
 }
 
 export function ConfigCard({
   isDark,
-  onToggleTheme,
   stats,
   isCrawling,
   isDiscovering,
@@ -25,7 +27,6 @@ export function ConfigCard({
 }: ConfigCardProps) {
   const [startUrl, setStartUrl] = useState("");
   const [sitemapUrl, setSitemapUrl] = useState("");
-  const [cssSelector, setCssSelector] = useState("");
   const [concurrency, setConcurrency] = useState(3);
 
   const isDisabled = isCrawling || isDiscovering;
@@ -33,7 +34,7 @@ export function ConfigCard({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isDisabled) {
-    onStartCrawl(startUrl, sitemapUrl, cssSelector, concurrency);
+      onStartCrawl(startUrl, sitemapUrl, concurrency);
     }
   };
 
@@ -48,9 +49,8 @@ export function ConfigCard({
       <div className="mb-4">
         <StatsGrid stats={stats} isDark={isDark} />
       </div>
-      
+
       <form onSubmit={handleSubmit}>
-        {/* <Header isDark={isDark} onToggleTheme={onToggleTheme} /> */}
 
         <div className="space-y-4">
           <div className="space-y-2">
@@ -65,8 +65,13 @@ export function ConfigCard({
             <input
               type="url"
               value={startUrl}
-              onChange={(e) => {setStartUrl(e.target.value)
-                setSitemapUrl(e.target.value.endsWith("/") ? e.target.value + "sitemap.xml" : e.target.value + "/sitemap.xml")
+              onChange={(e) => {
+                setStartUrl(e.target.value);
+                setSitemapUrl(
+                  e.target.value.endsWith("/")
+                    ? e.target.value + "sitemap.xml"
+                    : e.target.value + "/sitemap.xml"
+                );
               }}
               placeholder="https://www.google.com"
               disabled={isDisabled}
@@ -113,46 +118,12 @@ export function ConfigCard({
                 isDark ? "text-zinc-400" : "text-slate-600"
               }`}
             >
-              CSS Selector
-              <span
-                className={`ml-1 text-xs ${
-                  isDark ? "text-zinc-500" : "text-slate-400"
-                }`}
-              >
-                (optional)
-              </span>
-            </label>
-            <input
-              type="text"
-              value={cssSelector}
-              onChange={(e) => setCssSelector(e.target.value)}
-              placeholder=".main-content, #article-body"
-              disabled={isDisabled}
-              className={`w-full px-4 py-3 rounded-xl border input-focus-ring transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm ${
-                isDark
-                  ? "bg-zinc-900 border-zinc-600/80 text-white placeholder-zinc-500"
-                  : "bg-white border-slate-200 text-slate-900 placeholder-slate-400"
-              }`}
-            />
-            <p
-              className={`text-xs ${
-                isDark ? "text-zinc-500" : "text-slate-400"
-              }`}
-            >
-              Only check links & images within this selector
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label
-              className={`block text-sm font-medium ${
-                isDark ? "text-zinc-400" : "text-slate-600"
-              }`}
-            >
               Parallel Workers
               <span
                 className={`ml-2 font-mono text-xs px-1.5 py-0.5 rounded ${
-                  isDark ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600"
+                  isDark
+                    ? "bg-indigo-500/20 text-indigo-400"
+                    : "bg-indigo-100 text-indigo-600"
                 }`}
               >
                 {concurrency}
@@ -167,10 +138,14 @@ export function ConfigCard({
               disabled={isDisabled}
               className="w-full accent-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
-            <div className={`flex justify-between text-xs ${isDark ? "text-zinc-500" : "text-slate-400"}`}>
-              <span>1 (low RAM)</span>
+            <div
+              className={`flex justify-between text-xs ${
+                isDark ? "text-zinc-500" : "text-slate-400"
+              }`}
+            >
+              <span>1 (low resource usage)</span>
               <span>10 (balanced)</span>
-              <span>20 (fast)</span>
+              <span>20 (high resource usage)</span>
             </div>
           </div>
         </div>
@@ -184,7 +159,7 @@ export function ConfigCard({
         />
       </form>
 
-        {/* <StatsGrid stats={stats} isDark={isDark} /> */}
+      {/* <StatsGrid stats={stats} isDark={isDark} /> */}
     </section>
   );
 }

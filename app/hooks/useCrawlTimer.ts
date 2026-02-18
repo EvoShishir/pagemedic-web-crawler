@@ -2,30 +2,17 @@ import { useState, useEffect, useRef } from "react";
 
 export function useCrawlTimer(isActive: boolean): number {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wasActiveRef = useRef(false);
+  const startTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isActive && !wasActiveRef.current) {
-      setElapsedSeconds(0);
-    }
-    wasActiveRef.current = isActive;
-
     if (isActive) {
-      intervalRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+      startTimeRef.current = Date.now();
+      setElapsedSeconds(0);
+    } else if (startTimeRef.current) {
+      const seconds = Math.round((Date.now() - startTimeRef.current) / 1000);
+      setElapsedSeconds(seconds);
+      startTimeRef.current = null;
     }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
   }, [isActive]);
 
   return elapsedSeconds;

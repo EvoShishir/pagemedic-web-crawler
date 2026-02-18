@@ -36,7 +36,6 @@ export default function Home() {
     brokenLinks,
     brokenImages,
     consoleErrors,
-    navigationIssues,
     isCrawling,
     isDiscovering,
     currentUrl,
@@ -58,8 +57,7 @@ export default function Home() {
     logs,
     brokenLinks,
     brokenImages,
-    consoleErrors,
-    navigationIssues
+    consoleErrors
   );
   const { containerRef, handleScroll, resetAutoScroll } = useAutoScroll([logs]);
   const elapsedSeconds = useCrawlTimer(isCrawling || isDiscovering);
@@ -67,10 +65,9 @@ export default function Home() {
   const handleStart = (
     startUrl: string,
     sitemapUrl: string,
-    cssSelector: string,
     concurrency: number
   ) => {
-    discoverLinks(startUrl, sitemapUrl, cssSelector, concurrency, resetAutoScroll);
+    discoverLinks(startUrl, sitemapUrl, concurrency, resetAutoScroll);
   };
 
   // Get phase icon component
@@ -347,7 +344,7 @@ export default function Home() {
               links={discoveredLinks}
               selectedLinks={selectedLinks}
               onSelectionChange={setSelectedLinks}
-              onConfirm={startCrawlWithSelection}
+              onConfirm={(cssSelector) => startCrawlWithSelection(cssSelector)}
               onCancel={cancelPreview}
               isDark={isDark}
             />
@@ -358,12 +355,12 @@ export default function Home() {
             brokenLinks={brokenLinks}
             brokenImages={brokenImages}
             consoleErrors={consoleErrors}
-            navigationIssues={navigationIssues}
             currentUrl={currentUrl}
             isCrawling={isCrawling}
             isDark={isDark}
             containerRef={containerRef}
             onScroll={handleScroll}
+            onResetAutoScroll={resetAutoScroll}
             elapsedSeconds={elapsedSeconds}
           />
         )}
