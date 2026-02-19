@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "PageMedic | Real-Time Website Crawler & Broken Link Checker",
   description: "Audit website health with PageMedic. Crawl pages, detect broken links and images, track source pages, and monitor issues live.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
