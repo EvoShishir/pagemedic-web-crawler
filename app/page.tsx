@@ -36,6 +36,7 @@ export default function Home() {
     brokenLinks,
     brokenImages,
     consoleErrors,
+    linksChecked,
     isCrawling,
     isDiscovering,
     currentUrl,
@@ -57,7 +58,8 @@ export default function Home() {
     logs,
     brokenLinks,
     brokenImages,
-    consoleErrors
+    consoleErrors,
+    linksChecked
   );
   const { containerRef, handleScroll, resetAutoScroll } = useAutoScroll([logs]);
   const elapsedSeconds = useCrawlTimer(isCrawling || isDiscovering);

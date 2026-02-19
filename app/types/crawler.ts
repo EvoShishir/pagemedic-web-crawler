@@ -33,9 +33,10 @@ export interface NavigationIssue {
 }
 
 export interface CrawlerEventData {
-  type: "log" | "prompt" | "done" | "error" | "broken_link" | "broken_image" | "console_error" | "navigation_issue";
+  type: "log" | "prompt" | "done" | "error" | "broken_link" | "broken_image" | "console_error" | "navigation_issue" | "links_checked";
   message?: string;
   sessionId?: string;
+  count?: number;
   data?: BrokenLink | BrokenImage | ConsoleError | NavigationIssue;
 }
 

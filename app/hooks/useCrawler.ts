@@ -30,6 +30,7 @@ export function useCrawler() {
   const [brokenLinks, setBrokenLinks] = useState<BrokenLink[]>([]);
   const [brokenImages, setBrokenImages] = useState<BrokenImage[]>([]);
   const [consoleErrors, setConsoleErrors] = useState<ConsoleError[]>([]);
+  const [linksChecked, setLinksChecked] = useState(0);
   const [isCrawling, setIsCrawling] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
@@ -203,6 +204,7 @@ export function useCrawler() {
     setBrokenLinks([]);
     setBrokenImages([]);
     setConsoleErrors([]);
+    setLinksChecked(0);
     setIsCrawling(true);
     setDiscoveryProgress(null);
     pendingResetCallback?.();
@@ -291,6 +293,8 @@ export function useCrawler() {
                       response: shouldContinue ? "y" : "n",
                     }),
                   });
+                } else if (data.type === "links_checked") {
+                  setLinksChecked(data.count as number);
                 } else if (data.type === "done") {
                   setLogs((prev) => [...prev, data.message!]);
                   setCurrentUrl(null);
@@ -369,6 +373,7 @@ export function useCrawler() {
     brokenLinks,
     brokenImages,
     consoleErrors,
+    linksChecked,
     isCrawling,
     isDiscovering,
     currentUrl,

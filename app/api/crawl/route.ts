@@ -532,6 +532,8 @@ function handleCrawl(
 
       const visited = new Set<string>();
       const checkedResources = new Set<string>();
+      const headerLinksValidated = new Set<string>();
+      let totalLinksChecked = 0;
       
       const queue: string[] = selectedUrls ? [...selectedUrls] : [startUrl];
       const origin = new URL(startUrl).origin;
@@ -768,6 +770,7 @@ function handleCrawl(
           if (references.length > 0 && !checkedResources.has(url)) {
             const { status, ok } = await checkUrlStatus(url);
             checkedResources.add(url);
+            totalLinksChecked++;
             if (!ok && status >= 400) {
               for (const ref of references) {
                 brokenLinksCount++;
@@ -783,6 +786,7 @@ function handleCrawl(
         }
 
         totalCrawled++;
+        totalLinksChecked++;
         pageCurrentUrl.set(workerPage, url);
         const wTag = concurrency > 1 ? `[W${workerId}] ` : "";
 
@@ -866,17 +870,27 @@ function handleCrawl(
 
           // Register and queue internal links
           const linksToValidate: Array<{ url: string; text: string; context: string }> = [];
-          let skippedHeaderLinks = 0;
+          const headerLinksToValidate: Array<{ url: string; text: string; context: string }> = [];
           let skippedAlreadyVisited = 0;
           let skippedInSitemap = 0;
           let addedToQueue = 0;
 
           for (const link of internalLinks) {
             const cleanedUrl = cleanUrl(link.href);
-            
+
             if (link.isInHeader) {
-              if (hasSitemap) { skippedHeaderLinks++; continue; }
-              else if (!isFirstPage) { skippedHeaderLinks++; continue; }
+              // Validate each unique header/nav URL exactly once across all pages
+              if (
+                !headerLinksValidated.has(cleanedUrl) &&
+                !visited.has(cleanedUrl) &&
+                !queue.includes(cleanedUrl) &&
+                !checkedResources.has(cleanedUrl)
+              ) {
+                headerLinksValidated.add(cleanedUrl);
+                registerLink(cleanedUrl, { foundOnPage: url, linkText: link.text, elementContext: link.context });
+                headerLinksToValidate.push({ url: cleanedUrl, text: link.text, context: link.context });
+              }
+              continue;
             }
             
             registerLink(cleanedUrl, { foundOnPage: url, linkText: link.text, elementContext: link.context });
@@ -902,12 +916,36 @@ function handleCrawl(
             if (linksToValidate.length > 0) parts.push(`${linksToValidate.length} to validate`);
             if (skippedInSitemap > 0) parts.push(`${skippedInSitemap} in sitemap (assumed valid)`);
             if (skippedAlreadyVisited > 0) parts.push(`${skippedAlreadyVisited} already checked`);
-            if (skippedHeaderLinks > 0) parts.push(`${skippedHeaderLinks} header/nav skipped`);
+            if (headerLinksToValidate.length > 0) parts.push(`${headerLinksToValidate.length} nav/header to check`);
             if (parts.length > 0) {
               sendEvent({ type: "log", message: `${wTag}   ↳ Internal links: ${parts.join(", ")}` });
             }
           } else if (addedToQueue > 0) {
             sendEvent({ type: "log", message: `${wTag}   ↳ Added ${addedToQueue} new internal links to crawl queue` });
+          }
+
+          // Validate unique header/nav links (once per unique URL across all pages)
+          if (headerLinksToValidate.length > 0) {
+            sendEvent({ type: "log", message: `${wTag}🧭 Checking ${headerLinksToValidate.length} new nav/header link${headerLinksToValidate.length > 1 ? "s" : ""}...` });
+            for (const link of headerLinksToValidate) {
+              const { status, ok } = await checkUrlStatus(link.url);
+              totalLinksChecked++;
+              if (!ok && status >= 400) {
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [${status}] ${link.url}`,
+                  data: { url: link.url, statusCode: status, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              } else if (status === 0) {
+                brokenLinksCount++;
+                sendEvent({
+                  type: "broken_link",
+                  message: `${wTag}   ↳ ❌ [Unreachable] ${link.url}`,
+                  data: { url: link.url, statusCode: 0, foundOnPage: url, linkText: link.text, elementContext: link.context, timestamp: new Date().toISOString() } as BrokenLink,
+                });
+              }
+            }
           }
           
           if (isFirstPage) isFirstPage = false;
@@ -930,6 +968,7 @@ function handleCrawl(
 
               const { status, ok } = await checkUrlStatus(link.url);
               validatedCount++;
+              totalLinksChecked++;
 
               if (!ok && status >= 400) {
                 brokenCount++;
@@ -958,7 +997,7 @@ function handleCrawl(
             });
           }
 
-          // Check external links
+          // Check external links (including nav/header external links — deduplication via checkedResources)
           const externalLinks = links
             .filter((l) => {
               try {
@@ -966,7 +1005,6 @@ function handleCrawl(
                 return (linkUrl.protocol === "http:" || linkUrl.protocol === "https:") && !l.href.startsWith(origin);
               } catch { return false; }
             })
-            .filter((l) => !l.isInHeader)
             .filter((l) => !shouldSkipExternalCheck(l.href));
 
           if (externalLinks.length > 0) {
@@ -983,6 +1021,7 @@ function handleCrawl(
 
               const { status, ok } = await checkUrlStatus(link.href);
               externalChecked++;
+              totalLinksChecked++;
 
               if (!ok && status >= 400) {
                 externalBroken++;
@@ -1016,6 +1055,7 @@ function handleCrawl(
             if (!img.src || checkedResources.has(img.src)) continue;
             if (img.src === "#" || img.src.endsWith("#") || img.src.startsWith("data:") || img.src.startsWith("blob:") || img.src === url || !img.src.startsWith("http")) continue;
             
+            totalLinksChecked++;
             let isBroken = false;
             let reason = "";
             const isSvg = img.src.toLowerCase().includes(".svg");
@@ -1049,6 +1089,7 @@ function handleCrawl(
             let metaBroken = 0;
             for (const meta of uncheckedMeta) {
               checkedResources.add(meta.url);
+              totalLinksChecked++;
               const { status, ok } = await checkUrlStatus(meta.url);
               if (!ok && status >= 400) {
                 metaBroken++;
@@ -1078,6 +1119,7 @@ function handleCrawl(
 
           if (!checkedResources.has(url)) {
             checkedResources.add(url);
+            totalLinksChecked++;
             const { status, ok } = await checkUrlStatus(url);
 
             if (ok) {
@@ -1122,6 +1164,7 @@ function handleCrawl(
           activeWorkers++;
           await processUrl(workerPage, url, workerId);
           activeWorkers--;
+          sendEvent({ type: "links_checked", count: totalLinksChecked });
         }
       }
 
