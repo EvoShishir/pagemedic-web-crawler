@@ -1,3 +1,9 @@
+export interface LinkReference {
+  foundOnPage: string;
+  linkText: string;
+  elementContext: string;
+}
+
 export interface BrokenLink {
   url: string;
   statusCode: number;

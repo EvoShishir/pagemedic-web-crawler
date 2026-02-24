@@ -1,169 +1,10 @@
 import { chromium, Page } from "playwright";
 import { NextRequest } from "next/server";
-import https from "https";
-import http from "http";
-
-// File extensions that should not be crawled as pages
-const NON_HTML_EXTENSIONS = [
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-  ".zip", ".rar", ".7z", ".tar", ".gz",
-  ".mp3", ".mp4", ".avi", ".mov", ".wmv", ".wav", ".ogg",
-  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff",
-  ".css", ".js", ".json", ".txt", ".csv",
-  ".woff", ".woff2", ".ttf", ".eot", ".otf",
-];
-
-// Check if URL is a non-HTML resource
-function isNonHtmlResource(url: string): boolean {
-  try {
-    const pathname = new URL(url).pathname.toLowerCase();
-    return NON_HTML_EXTENSIONS.some((ext) => pathname.endsWith(ext));
-  } catch {
-    return false;
-  }
-}
-
-// Clean URL by removing hash
-function cleanUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    urlObj.hash = "";
-    return urlObj.toString();
-  } catch {
-    return url;
-  }
-}
-
-// Fetch XML content from URL
-async function fetchXml(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const options = { rejectUnauthorized: false };
-    
-    const makeRequest = (targetUrl: string, redirectCount = 0) => {
-      if (redirectCount > 5) {
-        reject(new Error("Too many redirects"));
-        return;
-      }
-      
-      const reqProtocol = targetUrl.startsWith("https") ? https : http;
-      reqProtocol
-        .get(targetUrl, options, (res) => {
-          // Handle redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            const redirectUrl = new URL(res.headers.location, targetUrl).toString();
-            makeRequest(redirectUrl, redirectCount + 1);
-            return;
-          }
-          
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => resolve(data));
-      })
-      .on("error", reject);
-    };
-    
-    makeRequest(url);
-  });
-}
-
-// Check if XML is a sitemap index (contains other sitemaps)
-function isSitemapIndex(xml: string): boolean {
-  return xml.includes("<sitemapindex") || xml.includes("<sitemap>");
-}
-
-// Extract sitemap URLs from a sitemap index
-function extractSitemapUrls(xml: string): string[] {
-  const urls: string[] = [];
-  // Match <sitemap>...<loc>URL</loc>...</sitemap> patterns
-  const sitemapMatches = xml.match(/<sitemap[^>]*>[\s\S]*?<\/sitemap>/gi) || [];
-  for (const match of sitemapMatches) {
-    const locMatch = match.match(/<loc>(.*?)<\/loc>/i);
-    if (locMatch && locMatch[1]) {
-      urls.push(locMatch[1].trim());
-    }
-  }
-  return urls;
-}
-
-// Parse sitemap and extract page URLs
-function parseSitemapUrls(xml: string): string[] {
-  const urls = new Set<string>();
-  // Match <url>...<loc>URL</loc>...</url> patterns (not inside <sitemap>)
-  const urlMatches = xml.match(/<url[^>]*>[\s\S]*?<\/url>/gi) || [];
-  for (const match of urlMatches) {
-    const locMatch = match.match(/<loc>(.*?)<\/loc>/i);
-    if (locMatch && locMatch[1]) {
-      urls.add(locMatch[1].trim());
-    }
-  }
-  
-  // Also try simple <loc> extraction for simpler sitemaps
-  if (urls.size === 0) {
-    const locMatches = xml.match(/<loc>(.*?)<\/loc>/gi) || [];
-  for (const match of locMatches) {
-      const loc = match.replace(/<\/?loc>/gi, "").trim();
-      // Skip sitemap URLs (they contain .xml)
-      if (!loc.endsWith(".xml") && !loc.includes("sitemap")) {
-    urls.add(loc);
-      }
-    }
-  }
-  
-  return [...urls];
-}
-
-// Helper to create SSE response
-function createSSEResponse() {
-  const encoder = new TextEncoder();
-  let controller: ReadableStreamDefaultController;
-  let isClosed = false;
-
-  const stream = new ReadableStream({
-    start(c) {
-      controller = c;
-    },
-  });
-
-  const sendEvent = (data: object) => {
-    if (isClosed) return;
-    try {
-      const message = `data: ${JSON.stringify(data)}\n\n`;
-      controller.enqueue(encoder.encode(message));
-    } catch {
-      isClosed = true;
-    }
-  };
-
-  const close = () => {
-    if (!isClosed) {
-      try {
-        controller.close();
-        isClosed = true;
-      } catch {
-        isClosed = true;
-      }
-    }
-  };
-
-  return { stream, sendEvent, close };
-}
-
-// Build a scoped selector that handles comma-separated selectors properly
-// e.g., ".main, #content" becomes ".main a[href], #content a[href]"
-function buildScopedSelector(baseSelector: string, targetSelector: string): string {
-  return baseSelector
-    .split(",")
-    .map((s) => `${s.trim()} ${targetSelector}`)
-    .join(", ");
-}
-
-// Extract links from page (optionally scoped to a CSS selector)
-async function extractLinksFromPage(page: Page, cssSelector?: string): Promise<string[]> {
-  const selector = cssSelector ? buildScopedSelector(cssSelector, "a[href]") : "a[href]";
-  return page.$$eval(selector, (anchors) => {
-    return anchors.map((a) => (a as HTMLAnchorElement).href);
-  });
-}
+import { createSSEResponse, sseHeaders } from "../../../lib/crawler/sse";
+import { cleanUrl, isNonHtmlResource, sortByPathDepth } from "../../../lib/crawler/url-utils";
+import { fetchXml } from "../../../lib/crawler/http";
+import { isSitemapIndex, extractSitemapUrls, parseSitemapUrls } from "../../../lib/crawler/sitemap";
+import { extractLinksFromPage } from "../../../lib/crawler/extractors";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -179,31 +20,29 @@ export async function GET(request: NextRequest) {
   const { stream, sendEvent, close } = createSSEResponse();
   const hasSitemap = !!sitemapUrl;
 
-  // Start discovery in the background
   (async () => {
     let browser;
 
-  try {
-    const origin = new URL(startUrl).origin;
-    const discoveredLinks = new Set<string>();
-    const visited = new Set<string>();
+    try {
+      const origin = new URL(startUrl).origin;
+      const discoveredLinks = new Set<string>();
+      const visited = new Set<string>();
       let sitemapLinksCount = 0;
 
       sendEvent({
         type: "status",
         phase: "starting",
-        message: hasSitemap 
-          ? "📄 Starting sitemap-based discovery..." 
+        message: hasSitemap
+          ? "📄 Starting sitemap-based discovery..."
           : "🔍 Starting page crawl discovery...",
         total: 0,
         fromSitemap: 0,
         pagesScanned: 0,
       });
 
-    // Add start URL
-    discoveredLinks.add(cleanUrl(startUrl));
+      discoveredLinks.add(cleanUrl(startUrl));
 
-      // MODE 1: Sitemap provided - only use sitemap links, no page scanning
+      // MODE 1: Sitemap provided — only use sitemap links, no page scanning
       if (hasSitemap) {
         sendEvent({
           type: "status",
@@ -215,8 +54,8 @@ export async function GET(request: NextRequest) {
         });
 
         try {
-          const xml = await fetchXml(sitemapUrl);
-          
+          const xml = await fetchXml(sitemapUrl!);
+
           if (isSitemapIndex(xml)) {
             const childSitemapUrls = extractSitemapUrls(xml);
             sendEvent({
@@ -228,28 +67,26 @@ export async function GET(request: NextRequest) {
               pagesScanned: 0,
             });
 
-            // Fetch all child sitemaps
             const PARALLEL_LIMIT = 5;
             for (let i = 0; i < childSitemapUrls.length; i += PARALLEL_LIMIT) {
               const batch = childSitemapUrls.slice(i, i + PARALLEL_LIMIT);
               const results = await Promise.all(
                 batch.map(async (url) => {
                   try {
-                    const childXml = await fetchXml(url);
-                    return parseSitemapUrls(childXml);
+                    return parseSitemapUrls(await fetchXml(url));
                   } catch {
                     return [];
                   }
                 })
               );
-              
+
               for (const urls of results) {
                 for (const url of urls) {
-          if (url.startsWith(origin) && !isNonHtmlResource(url)) {
-            discoveredLinks.add(cleanUrl(url));
+                  if (url.startsWith(origin) && !isNonHtmlResource(url)) {
+                    discoveredLinks.add(cleanUrl(url));
                     sitemapLinksCount++;
-          }
-        }
+                  }
+                }
               }
 
               sendEvent({
@@ -262,7 +99,6 @@ export async function GET(request: NextRequest) {
               });
             }
           } else {
-            // Regular sitemap
             sendEvent({
               type: "status",
               phase: "sitemap",
@@ -272,8 +108,7 @@ export async function GET(request: NextRequest) {
               pagesScanned: 0,
             });
 
-            const urls = parseSitemapUrls(xml);
-            for (const url of urls) {
+            for (const url of parseSitemapUrls(xml)) {
               if (url.startsWith(origin) && !isNonHtmlResource(url)) {
                 discoveredLinks.add(cleanUrl(url));
                 sitemapLinksCount++;
@@ -290,21 +125,8 @@ export async function GET(request: NextRequest) {
             pagesScanned: 0,
           });
 
-          // Sort links by path depth first, then alphabetically
-          const sortedLinks = [...discoveredLinks].sort((a, b) => {
-            try {
-              const pathA = new URL(a).pathname;
-              const pathB = new URL(b).pathname;
-              const depthA = pathA.split('/').filter(Boolean).length;
-              const depthB = pathB.split('/').filter(Boolean).length;
-              if (depthA !== depthB) return depthA - depthB;
-              return pathA.localeCompare(pathB);
-            } catch {
-              return a.localeCompare(b);
-            }
-          });
+          const sortedLinks = sortByPathDepth([...discoveredLinks]);
 
-          // Done - no page scanning when sitemap is provided
           sendEvent({
             type: "done",
             message: `🎉 Discovery complete! Found ${sitemapLinksCount} links from sitemap.`,
@@ -314,7 +136,6 @@ export async function GET(request: NextRequest) {
             fromPages: 0,
             pagesScanned: 0,
           });
-
         } catch (err) {
           sendEvent({
             type: "error",
@@ -322,27 +143,26 @@ export async function GET(request: NextRequest) {
           });
         }
       } else {
-        // MODE 2: No sitemap - crawl pages to discover links with parallel workers
-        const workerCount = concurrency;
+        // MODE 2: No sitemap — crawl pages to discover links with parallel workers
         sendEvent({
           type: "status",
           phase: "browser",
-          message: `🌐 Launching browser for page discovery... (${workerCount} worker${workerCount > 1 ? "s" : ""})`,
+          message: `🌐 Launching browser for page discovery... (${concurrency} worker${concurrency > 1 ? "s" : ""})`,
           total: discoveredLinks.size,
           fromSitemap: 0,
           pagesScanned: 0,
         });
 
         browser = await chromium.launch({ headless: true, args: ["--disable-http2"] });
-        const context = await browser.newContext({
+        const browserContext = await browser.newContext({
           ignoreHTTPSErrors: true,
           userAgent:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         });
 
         const pages: Page[] = [];
-        for (let i = 0; i < workerCount; i++) {
-          pages.push(await context.newPage());
+        for (let i = 0; i < concurrency; i++) {
+          pages.push(await browserContext.newPage());
         }
 
         const queue: string[] = [startUrl];
@@ -352,27 +172,20 @@ export async function GET(request: NextRequest) {
 
         async function processPage(workerPage: Page, url: string) {
           const previousSize = discoveredLinks.size;
-
           try {
-            await workerPage.goto(url, {
-              waitUntil: "domcontentloaded",
-              timeout: 15000,
-            });
-
+            await workerPage.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
             const links = await extractLinksFromPage(workerPage, cssSelector);
 
             for (const link of links) {
-              const cleanedLink = cleanUrl(link);
+              const cleaned = cleanUrl(link);
               if (
-                cleanedLink.startsWith(origin) &&
-                !isNonHtmlResource(cleanedLink) &&
-                !discoveredLinks.has(cleanedLink)
+                cleaned.startsWith(origin) &&
+                !isNonHtmlResource(cleaned) &&
+                !discoveredLinks.has(cleaned)
               ) {
-                discoveredLinks.add(cleanedLink);
+                discoveredLinks.add(cleaned);
                 newLinksFromPages++;
-                if (!visited.has(cleanedLink)) {
-                  queue.push(cleanedLink);
-                }
+                if (!visited.has(cleaned)) queue.push(cleaned);
               }
             }
 
@@ -397,7 +210,6 @@ export async function GET(request: NextRequest) {
         async function worker(workerPage: Page) {
           while (true) {
             if (pagesVisited >= MAX_PAGES_SAFETY) break;
-
             const url = queue.shift();
             if (!url) {
               if (activeWorkers === 0) break;
@@ -426,9 +238,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        await Promise.all(
-          pages.map((p) => worker(p))
-        );
+        await Promise.all(pages.map((p) => worker(p)));
 
         sendEvent({
           type: "status",
@@ -442,18 +252,7 @@ export async function GET(request: NextRequest) {
         await browser.close();
         browser = undefined;
 
-        const sortedLinks = [...discoveredLinks].sort((a, b) => {
-          try {
-            const pathA = new URL(a).pathname;
-            const pathB = new URL(b).pathname;
-            const depthA = pathA.split('/').filter(Boolean).length;
-            const depthB = pathB.split('/').filter(Boolean).length;
-            if (depthA !== depthB) return depthA - depthB;
-            return pathA.localeCompare(pathB);
-          } catch {
-            return a.localeCompare(b);
-          }
-        });
+        const sortedLinks = sortByPathDepth([...discoveredLinks]);
 
         sendEvent({
           type: "done",
@@ -470,20 +269,11 @@ export async function GET(request: NextRequest) {
         type: "error",
         message: err instanceof Error ? err.message : "Discovery failed",
       });
-
-      if (browser) {
-        await browser.close();
-      }
+      if (browser) await browser.close();
     } finally {
       close();
     }
   })();
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  return new Response(stream, { headers: sseHeaders() });
 }
